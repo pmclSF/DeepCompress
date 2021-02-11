@@ -1,0 +1,42 @@
+NOTES (for Paul, Saeed, Yun)
+
+You must have tf 1.15, pcl utils, pc_error_d (through mpeg dmetric, but there are copies floating around github)
+In order to compare with G-PCC you also need mpeg-pcc-tmc13, which is linked in the README
+An overview of what you need to know/do that isn't in the readme
+
+* The data is located here (we use automatically aligned):
+https://github.com/lmb-freiburg/orion
+* After you have the data, run:
+# generate the training dataset (using the example from the README)
+python ds_select_largest.py ~/data/datasets/ModelNet40 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200 200
+python ds_mesh_to_pc.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512 --vg_size 512
+python ds_pc_octree_blocks.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3 --vg_size 512 --level 3 
+python ds_select_largest.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3_4k 4000
+# generate the normals for each 8i VFB point cloud and put them in the same directory as the 8i VFB point cloud they correspond to
+# to demonstrate I will use x.ply as a stand-in for the file name you are generating normals for
+pcl_ply2pcd x.ply x.pcd
+pcl_normal_estimation x.pcd x_n.pcd -k 12 # as per the MPEG CTC standard
+pcl_pcd2ply x_n.pcd x_n.ply
+
+* The models that we use are c3p and c3p2, c3p3
+* I've left some of the morphnet remnants in, feel free to remove them
+* The relevant changes from the baseline model are primarily in model_opt.py
+* To train the model the way we have been training it:
+  * First set your activation function at the top of model_transform.py
+  * Then start training as follows: (it crashes sometimes so you may need to restart it,
+                                     hence my giving up on the .yml experiment descriptions)
+    python tr_train.py path/to/ModelNet40_200_pc512_oct3_4k/**/*.ply path/to/dest_model/folder \
+      --resolution 64 --lmbda LAMBDA --alpha 0.75 --gamma 2.0 --batch_size 32 --model_config CONFIG \
+      [--warm_start path/to/previous_model/folder]
+    * An advantage of this is that you can have your model's weights and your dataset wherever you'd like
+* If you want the slow way of compressing a PC and generating an output .ply, use:
+octree_compress.py --input_files input.ply --output_files output.ply.bin \
+  --checkpoint_dir /path/to/checkpoint --max_deltas inf --resolution 1024 --model_config CONFIG \
+  --dec_files output.ply
+* If you want the standard way that is up to date with Wang et. al., use:
+octree_compress.py ...  --fixed_threshold
+* To evaluate the size of the learned code, ls -la the file you generate from that script
+* To evaluate the PSNR, run
+pc_error_d --fileA=/path/to/8iVFB/reference.ply --inputNorm=/path/to/8iVFB/reference_n.ply --resolution 1024 \
+  --fileB=/path/to/decompressed.ply
+and look at the symmetric measure
