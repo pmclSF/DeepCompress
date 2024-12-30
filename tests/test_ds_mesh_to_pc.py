@@ -1,58 +1,63 @@
+import unittest
 import numpy as np
-import pytest
-from ds_mesh_to_pc import partition_octree, departition_octree, split_octree
+import os
+from ds_mesh_to_pc import read_off, sample_points_from_mesh, save_ply, convert_mesh_to_point_cloud
 
-def test_split_octree():
-    bbox_min = [0, 0, 0]
-    bbox_max = [8, 8, 8]
-    points = np.array([
-        [1, 1, 1],
-        [2, 2, 2],
-        [6, 6, 6],
-        [7, 7, 7],
-        [4, 4, 4]
-    ])
+class TestDsMeshToPc(unittest.TestCase):
 
-    ret_points, binstr, local_bboxes = split_octree(points, bbox_min, bbox_max)
+    def setUp(self):
+        """Set up temporary test data."""
+        self.test_off_file = "test.off"
+        self.test_ply_file = "test.ply"
+        self.vertices = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0]
+        ])
 
-    assert len(ret_points) == 8, "Should split into 8 octants"
-    assert len(ret_points[0]) == 3, "Incorrect point count in octant 0"
-    assert len(ret_points[7]) == 2, "Incorrect point count in octant 7"
+        # Write a minimal OFF file
+        with open(self.test_off_file, "w") as file:
+            file.write("OFF\n")
+            file.write(f"{len(self.vertices)} 0 0\n")
+            for vertex in self.vertices:
+                file.write(f"{vertex[0]} {vertex[1]} {vertex[2]}\n")
 
-def test_partition_octree():
-    bbox_min = [0, 0, 0]
-    bbox_max = [8, 8, 8]
-    points = np.array([
-        [1, 1, 1],
-        [2, 2, 2],
-        [6, 6, 6], 
-        [7, 7, 7],
-        [4, 4, 4]
-    ])
-    level = 2
+    def tearDown(self):
+        """Clean up test files."""
+        if os.path.exists(self.test_off_file):
+            os.remove(self.test_off_file)
+        if os.path.exists(self.test_ply_file):
+            os.remove(self.test_ply_file)
 
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    
-    assert len(blocks) == 4, "Should partition into 4 blocks"
+    def test_read_off(self):
+        """Test reading an OFF file."""
+        vertices = read_off(self.test_off_file)
+        np.testing.assert_array_equal(vertices, self.vertices, "OFF file reading failed.")
 
-def test_departition_octree():
-    bbox_min = [0, 0, 0]
-    bbox_max = [8, 8, 8]
-    points = np.array([
-        [1, 1, 1],
-        [2, 2, 2],
-        [6, 6, 6],
-        [7, 7, 7],
-        [4, 4, 4]
-    ])
-    level = 2
+    def test_sample_points_from_mesh(self):
+        """Test sampling points from mesh vertices."""
+        sampled_points = sample_points_from_mesh(self.vertices, num_points=3)
+        self.assertEqual(sampled_points.shape, (3, 3))
+        for point in sampled_points:
+            self.assertTrue(np.any(np.all(self.vertices == point, axis=1)), "Sampled point not in original vertices.")
 
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
+    def test_save_ply(self):
+        """Test saving a point cloud to a PLY file."""
+        save_ply(self.test_ply_file, self.vertices)
+        self.assertTrue(os.path.exists(self.test_ply_file), "PLY file not created.")
 
-    # Sort both arrays
-    points_sorted = points[np.lexsort((points[:,2], points[:,1], points[:,0]))]
-    reconstructed_sorted = reconstructed_points[np.lexsort((reconstructed_points[:,2], reconstructed_points[:,1], reconstructed_points[:,0]))]
+        # Verify file content
+        with open(self.test_ply_file, "r") as file:
+            lines = file.readlines()
+        self.assertEqual(lines[0].strip(), "ply")
+        self.assertEqual(lines[2].strip(), f"element vertex {len(self.vertices)}")
 
-    assert reconstructed_points.shape == points.shape, "Reconstructed shape mismatch"
-    assert np.allclose(reconstructed_sorted, points_sorted), "Reconstructed points mismatch"
+    def test_convert_mesh_to_point_cloud(self):
+        """Test converting an OFF mesh to a PLY point cloud."""
+        convert_mesh_to_point_cloud(self.test_off_file, self.test_ply_file, num_points=3)
+        self.assertTrue(os.path.exists(self.test_ply_file), "PLY file not created during conversion.")
+
+if __name__ == "__main__":
+    unittest.main()
