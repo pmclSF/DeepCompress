@@ -1,64 +1,150 @@
-# parallel_process.py
-
+import multiprocessing
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Any, List, Tuple
+import logging
+import time
+from typing import Callable, Any, List, Dict, Optional, Union
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import dataclass
+from queue import Queue
+
+@dataclass
+class ProcessResult:
+    """Container for process execution results."""
+    index: int
+    result: Any
+    success: bool
+    error: Optional[Exception] = None
+
+class ProcessTimeoutError(Exception):
+    """Custom exception for process timeouts."""
+    pass
+
+class Popen:
+    def __init__(self, 
+                 cmd: List[str], 
+                 stdout: Any = None, 
+                 stderr: Any = None,
+                 timeout: Optional[float] = None):
+        """
+        Enhanced subprocess management with timeout support.
+        """
+        self.cmd = cmd
+        self.timeout = timeout
+        self.start_time = time.time()
+        
+        self.process = subprocess.Popen(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            universal_newlines=True
+        )
+
+    def wait(self, timeout: Optional[float] = None) -> int:
+        """Wait for the subprocess to complete with timeout."""
+        wait_timeout = timeout or self.timeout
+        
+        if wait_timeout is not None:
+            try:
+                return self.process.wait(timeout=wait_timeout)
+            except subprocess.TimeoutExpired:
+                self.terminate()
+                raise ProcessTimeoutError(
+                    f"Process timed out after {wait_timeout} seconds: {' '.join(self.cmd)}"
+                )
+        
+        return self.process.wait()
+
+    def terminate(self):
+        """Terminate the subprocess with cleanup."""
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=1.0)
+        except (subprocess.TimeoutExpired, ProcessTimeoutError):
+            self.process.kill()
+        finally:
+            if hasattr(self.process, 'stdout') and self.process.stdout:
+                self.process.stdout.close()
+            if hasattr(self.process, 'stderr') and self.process.stderr:
+                self.process.stderr.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.terminate()
 
 def parallel_process(
-    func: Callable[..., Any],
-    params: List[Tuple],
+    func: Callable[[Any], Any],
+    params_list: List[Any],
     num_parallel: int = 4,
-    timeout: int = None
+    max_retries: int = 3,
+    timeout: Optional[float] = None
 ) -> List[Any]:
     """
-    Execute a function in parallel with multiple parameters using threading.
-
-    Args:
-        func (Callable[..., Any]): The function to execute in parallel.
-        params (List[Tuple]): A list of tuples, where each tuple contains the arguments for a single function call.
-        num_parallel (int): Number of parallel threads.
-        timeout (int): Timeout in seconds for each function call (optional).
-
-    Returns:
-        List[Any]: A list of results corresponding to the function calls.
+    Enhanced parallel execution with retries and result ordering.
     """
-    results = [None] * len(params)  # Placeholder for results to preserve order
-    with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-        futures = {executor.submit(func, *param): idx for idx, param in enumerate(params)}
+    def wrapped_func(param: Any) -> Any:
+        """Wrapper to handle timeouts at the function level."""
+        if timeout:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(func, param)
+                try:
+                    return future.result(timeout=timeout)
+                except TimeoutError:
+                    raise ProcessTimeoutError(f"Task timed out after {timeout} seconds")
+        return func(param)
 
-        for future in as_completed(futures):
-            idx = futures[future]
+    def worker(index: int, param: Any, result_queue: Queue) -> None:
+        """Worker function that handles retries."""
+        for attempt in range(max_retries):
             try:
-                results[idx] = future.result(timeout=timeout)
+                result = wrapped_func(param)
+                result_queue.put(ProcessResult(
+                    index=index,
+                    result=result,
+                    success=True
+                ))
+                return
             except Exception as e:
-                print(f"Error with parameters {params[idx]}: {e}")
-                results[idx] = None
+                if attempt == max_retries - 1:
+                    logging.error(f"Task failed after {max_retries} attempts: {str(e)}")
+                    result_queue.put(ProcessResult(
+                        index=index,
+                        result=None,
+                        success=False,
+                        error=e
+                    ))
+                else:
+                    logging.warning(f"Attempt {attempt + 1} failed, retrying...")
+                    time.sleep(0.1)  # Small delay between retries
 
-    return results
-
-def Popen(command: List[str], stdout=None, stderr=None) -> subprocess.Popen:
-    """
-    Wrapper for subprocess.Popen to execute a shell command.
-
-    Args:
-        command (List[str]): Command to execute.
-        stdout: File or stream to capture standard output (default: None).
-        stderr: File or stream to capture standard error (default: None).
-
-    Returns:
-        subprocess.Popen: The process object for the executed command.
-    """
-    return subprocess.Popen(command, stdout=stdout, stderr=stderr, text=True)
-
-# Test the functionality
-if __name__ == "__main__":
-    def test_function(x, y):
-        return x + y
-
-    params = [(1, 2), (3, 4), (5, 6)]
-    results = parallel_process(test_function, params, num_parallel=2)
-    print("Parallel process results:", results)
-
-    command = ["echo", "Hello, World!"]
-    process = Popen(command)
-    process.communicate()
+    # Process all parameters in parallel
+    result_queue: Queue = Queue()
+    results_dict: Dict[int, ProcessResult] = {}
+    
+    with ThreadPoolExecutor(max_workers=num_parallel) as executor:
+        futures = [
+            executor.submit(worker, i, param, result_queue)
+            for i, param in enumerate(params_list)
+        ]
+        
+        # Wait for all tasks to complete
+        for future in futures:
+            future.result()  # This will propagate any exceptions
+    
+    # Collect results and maintain order
+    while len(results_dict) < len(params_list):
+        result = result_queue.get()
+        results_dict[result.index] = result
+    
+    # Process results in order
+    ordered_results = []
+    for i in range(len(params_list)):
+        result = results_dict[i]
+        if not result.success:
+            if isinstance(result.error, ProcessTimeoutError):
+                raise TimeoutError(str(result.error))
+            raise result.error or RuntimeError(f"Task {i} failed without specific error")
+        ordered_results.append(result.result)
+        
+    return ordered_results

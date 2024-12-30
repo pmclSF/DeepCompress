@@ -1,61 +1,97 @@
-import sys
-import os
-import tempfile
-import pandas as pd
+import unittest
 import numpy as np
-import pytest
-from map_color import load_point_cloud, map_colors, save_point_cloud
+import os
+from map_color import load_point_cloud, load_colors, transfer_colors, save_colored_point_cloud
 
-# Add the 'src' directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+class TestMapColor(unittest.TestCase):
 
-def create_dummy_point_cloud(file_path, num_points=100):
-    """Create a dummy point cloud CSV file."""
-    data = {
-        'x': np.random.rand(num_points),
-        'y': np.random.rand(num_points),
-        'z': np.random.rand(num_points),
-        'red': np.random.randint(0, 256, num_points),
-        'green': np.random.randint(0, 256, num_points),
-        'blue': np.random.randint(0, 256, num_points)
-    }
-    df = pd.DataFrame(data)
-    df.to_csv(file_path, index=False)
-    return df
+    def setUp(self):
+        """Set up temporary test data."""
+        self.source_ply = "source.ply"
+        self.target_ply = "target.ply"
+        self.output_ply = "output.ply"
 
-def test_load_point_cloud():
-    """Test loading a point cloud from a CSV file."""
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as temp_file:
-        create_dummy_point_cloud(temp_file.name)
-        points = load_point_cloud(temp_file.name)
+        self.source_points = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0]
+        ])
+        self.source_colors = np.array([
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255]
+        ])
+        self.target_points = np.array([
+            [0.5, 0.0, 0.0],
+            [0.0, 0.5, 0.0]
+        ])
 
-    assert not points.empty, "Loaded point cloud should not be empty."
-    assert set(['x', 'y', 'z', 'red', 'green', 'blue']).issubset(points.columns), "Missing required columns in point cloud."
+        # Create source PLY file
+        with open(self.source_ply, "w") as file:
+            file.write("ply\n")
+            file.write("format ascii 1.0\n")
+            file.write(f"element vertex {self.source_points.shape[0]}\n")
+            file.write("property float x\n")
+            file.write("property float y\n")
+            file.write("property float z\n")
+            file.write("property uchar red\n")
+            file.write("property uchar green\n")
+            file.write("property uchar blue\n")
+            file.write("end_header\n")
+            for point, color in zip(self.source_points, self.source_colors):
+                file.write(f"{point[0]} {point[1]} {point[2]} {int(color[0])} {int(color[1])} {int(color[2])}\n")
 
+        # Create target PLY file
+        with open(self.target_ply, "w") as file:
+            file.write("ply\n")
+            file.write("format ascii 1.0\n")
+            file.write(f"element vertex {self.target_points.shape[0]}\n")
+            file.write("property float x\n")
+            file.write("property float y\n")
+            file.write("property float z\n")
+            file.write("end_header\n")
+            for point in self.target_points:
+                file.write(f"{point[0]} {point[1]} {point[2]}\n")
 
-def test_map_colors():
-    """Test mapping colors from one point cloud to another."""
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as ori_file, \
-         tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as target_file:
+    def tearDown(self):
+        """Clean up test files."""
+        for file_path in [self.source_ply, self.target_ply, self.output_ply]:
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
-        ori_points = create_dummy_point_cloud(ori_file.name)
-        target_points = create_dummy_point_cloud(target_file.name, num_points=50)[['x', 'y', 'z']]
+    def test_load_point_cloud(self):
+        """Test loading point cloud from PLY file."""
+        points = load_point_cloud(self.source_ply)
+        np.testing.assert_array_equal(points, self.source_points, "Source point cloud loading failed.")
 
-        mapped_points = map_colors(ori_points, target_points)
+    def test_load_colors(self):
+        """Test loading colors from PLY file."""
+        colors = load_colors(self.source_ply)
+        np.testing.assert_array_equal(colors * 255, self.source_colors, "Source colors loading failed.")
 
-    assert not mapped_points.empty, "Mapped point cloud should not be empty."
-    assert set(['x', 'y', 'z', 'red', 'green', 'blue']).issubset(mapped_points.columns), "Missing required columns in mapped point cloud."
+    def test_transfer_colors(self):
+        """Test transferring colors from source to target point cloud."""
+        target_colors = transfer_colors(self.source_points, self.source_colors, self.target_points)
+        self.assertEqual(target_colors.shape, self.target_points.shape, "Transferred colors shape mismatch.")
 
+    def test_save_colored_point_cloud(self):
+        """Test saving a colored point cloud to PLY."""
+        colors = np.array([
+            [100, 150, 200],
+            [50, 75, 125]
+        ])
+        save_colored_point_cloud(self.output_ply, self.target_points, colors / 255.0)
+        self.assertTrue(os.path.exists(self.output_ply), "Colored PLY file not created.")
 
-def test_save_point_cloud():
-    """Test saving a point cloud to a CSV file."""
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as temp_file:
-        points = create_dummy_point_cloud(temp_file.name)
-        output_path = temp_file.name + '_output.csv'
+    def test_end_to_end(self):
+        """Test end-to-end color transfer and saving."""
+        source_points = load_point_cloud(self.source_ply)
+        source_colors = load_colors(self.source_ply)
+        target_points = load_point_cloud(self.target_ply)
 
-        save_point_cloud(points, output_path)
+        target_colors = transfer_colors(source_points, source_colors, target_points)
+        save_colored_point_cloud(self.output_ply, target_points, target_colors)
+        self.assertTrue(os.path.exists(self.output_ply), "Output PLY file not created.")
 
-        assert os.path.exists(output_path), "Output file was not created."
-
-if __name__ == '__main__':
-    pytest.main([__file__])
+if __name__ == "__main__":
+    unittest.main()

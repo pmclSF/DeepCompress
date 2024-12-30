@@ -1,99 +1,91 @@
-# model_opt.py
-
-# Import required libraries
-import tensorflow as tf
-from tensorflow.keras import layers
 import numpy as np
+import tensorflow as tf
+from typing import Any, Tuple
 
-# Loss function for Chamfer Distance
-def chamfer_distance(pc1, pc2):
-    """
-    Compute the Chamfer Distance between two point clouds.
+class ModelOptimizer:
+    def __init__(self, learning_rate: float = 0.001):
+        """
+        Initialize the ModelOptimizer class.
 
-    Args:
-        pc1: First point cloud as a tensor of shape (N, D).
-        pc2: Second point cloud as a tensor of shape (M, D).
+        Args:
+            learning_rate (float): Learning rate for the optimizer.
+        """
+        self.learning_rate = learning_rate
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
-    Returns:
-        tf.Tensor: Chamfer distance between pc1 and pc2.
-    """
-    diff1 = tf.reduce_mean(tf.reduce_min(tf.norm(pc1[:, None] - pc2[None, :], axis=-1), axis=1))
-    diff2 = tf.reduce_mean(tf.reduce_min(tf.norm(pc2[:, None] - pc1[None, :], axis=-1), axis=1))
-    return diff1 + diff2
+    def optimize_model(self, model: tf.keras.Model, inputs: np.ndarray, targets: np.ndarray, 
+                       loss_fn: Any, epochs: int = 10, batch_size: int = 32) -> Tuple[tf.keras.Model, list]:
+        """
+        Optimize a Keras model using a given loss function and dataset.
 
-# Model definition for point cloud compression
-class PointCloudAutoencoder(tf.keras.Model):
-    def __init__(self):
-        super(PointCloudAutoencoder, self).__init__()
-        # Encoder
-        self.encoder = tf.keras.Sequential([
-            layers.InputLayer(input_shape=(64, 64, 64, 1)),
-            layers.Conv3D(32, (3, 3, 3), activation='relu', padding='same'),
-            layers.AveragePooling3D((2, 2, 2)),
-            layers.Conv3D(64, (3, 3, 3), activation='relu', padding='same'),
-            layers.AveragePooling3D((2, 2, 2)),
-        ])
-        # Bottleneck
-        self.bottleneck = layers.Conv3D(128, (3, 3, 3), activation='relu', padding='same')
-        # Decoder
-        self.decoder = tf.keras.Sequential([
-            layers.Conv3DTranspose(64, (3, 3, 3), activation='relu', padding='same'),
-            layers.UpSampling3D((2, 2, 2)),
-            layers.Conv3DTranspose(32, (3, 3, 3), activation='relu', padding='same'),
-            layers.UpSampling3D((2, 2, 2)),
-            layers.Conv3D(1, (3, 3, 3), activation='sigmoid', padding='same'),
-        ])
-        # Optimizer
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+        Args:
+            model (tf.keras.Model): The Keras model to optimize.
+            inputs (np.ndarray): Input data.
+            targets (np.ndarray): Target labels.
+            loss_fn (callable): Loss function for optimization.
+            epochs (int): Number of training epochs.
+            batch_size (int): Batch size for training.
 
-    def call(self, inputs):
-        x = self.encoder(inputs)
-        x = self.bottleneck(x)
-        return self.decoder(x)
+        Returns:
+            Tuple[tf.keras.Model, list]: Trained model and list of loss values for each epoch.
+        """
+        dataset = tf.data.Dataset.from_tensor_slices((inputs, targets)).batch(batch_size)
+        loss_history = []
 
-# Preprocessing function for point clouds
-def preprocess_point_cloud(point_cloud, voxel_size=0.05):
-    """
-    Preprocess a point cloud by voxelization using TensorFlow operations.
+        for epoch in range(epochs):
+            epoch_loss = 0
+            for batch_inputs, batch_targets in dataset:
+                with tf.GradientTape() as tape:
+                    predictions = model(batch_inputs, training=True)
+                    loss = loss_fn(batch_targets, predictions)
 
-    Args:
-        point_cloud (tf.Tensor): Tensor of shape (N, 3) representing the point cloud.
-        voxel_size (float): Size of each voxel.
+                gradients = tape.gradient(loss, model.trainable_variables)
+                self.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+                epoch_loss += loss.numpy()
 
-    Returns:
-        tf.Tensor: Preprocessed point cloud with points snapped to a voxel grid.
-    """
-    # Quantize point cloud to voxel grid
-    quantized = tf.math.round(point_cloud / voxel_size) * voxel_size
+            loss_history.append(epoch_loss / len(dataset))
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss_history[-1]:.4f}")
 
-    # Remove duplicate points
-    unique_quantized = tf.unique(tf.reshape(quantized, [-1, 3]))[0]
+        return model, loss_history
 
-    return unique_quantized
+    def evaluate_model(self, model: tf.keras.Model, inputs: np.ndarray, targets: np.ndarray, loss_fn: Any) -> float:
+        """
+        Evaluate the model using a given dataset and loss function.
 
-# Training function
-def train_autoencoder(autoencoder, dataset, epochs=10, batch_size=8):
-    """
-    Train the point cloud autoencoder.
+        Args:
+            model (tf.keras.Model): The Keras model to evaluate.
+            inputs (np.ndarray): Input data.
+            targets (np.ndarray): Target labels.
+            loss_fn (callable): Loss function for evaluation.
 
-    Args:
-        autoencoder (PointCloudAutoencoder): Autoencoder model.
-        dataset (tf.data.Dataset): Dataset for training.
-        epochs (int): Number of epochs.
-        batch_size (int): Batch size.
+        Returns:
+            float: Evaluation loss.
+        """
+        predictions = model(inputs, training=False)
+        loss = loss_fn(targets, predictions)
+        return loss.numpy()
 
-    Returns:
-        None
-    """
-    for epoch in range(epochs):
-        for batch in dataset.batch(batch_size):
-            with tf.GradientTape() as tape:
-                reconstructed = autoencoder(batch, training=True)
-                loss = chamfer_distance(batch, reconstructed)
-            gradients = tape.gradient(loss, autoencoder.trainable_variables)
-            autoencoder.optimizer.apply_gradients(zip(gradients, autoencoder.trainable_variables))
+# Example usage
+if __name__ == "__main__":
+    # Sample model
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.Dense(1)
+    ])
 
-        print(f"Epoch {epoch + 1}, Loss: {loss.numpy():.4f}")
+    # Synthetic dataset
+    inputs = np.random.rand(1000, 10).astype(np.float32)
+    targets = np.random.rand(1000, 1).astype(np.float32)
 
-# Explicit exports
-__all__ = ['PointCloudAutoencoder', 'chamfer_distance', 'preprocess_point_cloud', 'train_autoencoder']
+    # Loss function
+    loss_fn = tf.keras.losses.MeanSquaredError()
+
+    # Initialize optimizer
+    optimizer = ModelOptimizer(learning_rate=0.001)
+
+    # Train model
+    model, loss_history = optimizer.optimize_model(model, inputs, targets, loss_fn, epochs=10, batch_size=32)
+
+    # Evaluate model
+    evaluation_loss = optimizer.evaluate_model(model, inputs, targets, loss_fn)
+    print(f"Evaluation Loss: {evaluation_loss:.4f}")

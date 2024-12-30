@@ -4,205 +4,73 @@ import os
 # Add the 'src' directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-import numpy as np
-import pytest
-from octree_coding import partition_octree, departition_octree
+import unittest
+import tensorflow as tf
+from octree_coding import OctreeCoder
 
-def test_partition_and_departition():
-    """Test basic partitioning and reconstruction of points."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [16, 16, 16]
-    level = 4
+class TestOctreeCoder(unittest.TestCase):
 
-    # Test with points that were previously failing
-    points = np.array([
-        [14, 4, 15], [6, 15, 10], [14, 13, 2], [0, 6, 11],
-        [12, 15, 8], [2, 15, 8], [11, 1, 13], [11, 3, 10]
-    ], dtype=np.int64)
+    def setUp(self):
+        """Set up test cases with a sample point cloud."""
+        self.point_cloud = tf.constant([
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [2.0, 2.0, 2.0],
+            [3.0, 3.0, 3.0],
+            [4.0, 4.0, 4.0]
+        ], dtype=tf.float32)
+        self.coder = OctreeCoder(resolution=8)
 
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
+    def test_encode(self):
+        """Test encoding a point cloud into a binary voxel grid."""
+        grid, metadata = self.coder.encode(self.point_cloud)
 
-    # Sort points for comparison
-    original_sorted = np.array(sorted(map(tuple, points)))
-    reconstructed_sorted = np.array(sorted(map(tuple, reconstructed_points)))
+        self.assertEqual(grid.shape, (8, 8, 8), "Grid shape mismatch.")
+        self.assertTrue(tf.reduce_any(grid).numpy(), "Grid is empty after encoding.")
+        self.assertIn("min_bounds", metadata, "Metadata missing 'min_bounds'.")
+        self.assertIn("max_bounds", metadata, "Metadata missing 'max_bounds'.")
+        self.assertIn("scale", metadata, "Metadata missing 'scale'.")
 
-    np.testing.assert_array_equal(
-        original_sorted, 
-        reconstructed_sorted,
-        err_msg=f"Missing points: {set(map(tuple, points)) - set(map(tuple, reconstructed_points))}, "
-               f"Extra points: {set(map(tuple, reconstructed_points)) - set(map(tuple, points))}"
-    )
+    def test_decode(self):
+        """Test decoding a binary voxel grid back into a point cloud."""
+        grid, metadata = self.coder.encode(self.point_cloud)
+        decoded_points = self.coder.decode(grid, metadata)
 
-def test_large_partition():
-    """Test with a large number of random points."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [256, 256, 256]
-    level = 8
+        self.assertEqual(decoded_points.shape[1], 3, "Decoded points should have 3 dimensions.")
+        self.assertTrue(tf.reduce_all(decoded_points >= metadata["min_bounds"]),
+                        "Decoded points are out of bounds (below).")
+        self.assertTrue(tf.reduce_all(decoded_points <= metadata["max_bounds"]),
+                        "Decoded points are out of bounds (above).")
 
-    # Use fixed seed for reproducibility
-    np.random.seed(42)
-    points = np.random.randint(0, 256, (1000, 3), dtype=np.int64)
+    def test_round_trip(self):
+        """Test round-trip encoding and decoding consistency."""
+        grid, metadata = self.coder.encode(self.point_cloud)
+        decoded_points = self.coder.decode(grid, metadata)
 
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
+        # Ensure the decoded points match the original point cloud closely
+        for point in self.point_cloud:
+            distances = tf.norm(decoded_points - point, axis=1)
+            self.assertLessEqual(tf.reduce_min(distances).numpy(), 1.0,
+                                 f"Point {point.numpy()} not accurately represented in decoded points.")
 
-    # Sort points for comparison
-    original_sorted = np.array(sorted(map(tuple, points)))
-    reconstructed_sorted = np.array(sorted(map(tuple, reconstructed_points)))
+    def test_partition_octree(self):
+        """Test partitioning a point cloud into octree blocks."""
+        initial_bbox = (0, 5, 0, 5, 0, 5)  # Bounding box
+        level = 2
+        blocks = self.coder.partition_octree(self.point_cloud, initial_bbox, level)
 
-    np.testing.assert_array_equal(
-        original_sorted,
-        reconstructed_sorted,
-        err_msg="Large partition failed to reconstruct points exactly"
-    )
+        self.assertGreater(len(blocks), 0, "No blocks were created.")
+        for block, bbox in blocks:
+            # Get min and max bounds for x, y, z
+            mins = tf.constant([bbox[0], bbox[2], bbox[4]], dtype=tf.float32)  # xmin, ymin, zmin
+            maxs = tf.constant([bbox[1], bbox[3], bbox[5]], dtype=tf.float32)  # xmax, ymax, zmax
 
-def test_empty_partition():
-    """Test handling of empty point sets."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [16, 16, 16]
-    level = 4
+            # Check if points are within bounds (with small epsilon for floating point precision)
+            epsilon = 1e-10
+            self.assertTrue(tf.reduce_all(block >= (mins - epsilon)),
+                            f"Block points {block.numpy()} are below the bounding box {mins.numpy()}.")
+            self.assertTrue(tf.reduce_all(block <= (maxs + epsilon)),
+                            f"Block points {block.numpy()} are above the bounding box {maxs.numpy()}.")
 
-    points = np.array([], dtype=np.int64).reshape(0, 3)
-
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
-
-    assert len(reconstructed_points) == 0, "Empty input should produce empty output"
-    assert reconstructed_points.shape == (0,) or reconstructed_points.shape == (0, 3), \
-        "Empty output should have correct shape"
-
-def test_single_point():
-    """Test with a single point."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [16, 16, 16]
-    level = 4
-
-    points = np.array([[8, 8, 8]], dtype=np.int64)
-
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
-
-    np.testing.assert_array_equal(
-        points,
-        reconstructed_points,
-        err_msg=f"Single point {points} not reconstructed correctly as {reconstructed_points}"
-    )
-
-def test_high_dimensional_points():
-    """Test with points having additional dimensions beyond xyz."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [16, 16, 16]
-    level = 4
-
-    points = np.array([
-        [1, 2, 3, 0.5],
-        [4, 5, 6, 0.6],
-        [7, 8, 9, 0.7]
-    ])
-
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
-
-    np.testing.assert_array_almost_equal(
-        points,
-        reconstructed_points,
-        decimal=6,
-        err_msg="High dimensional points not reconstructed correctly"
-    )
-
-def test_boundary_points():
-    """Test with points at the boundaries of the bounding box."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [16, 16, 16]
-    level = 4
-
-    points = np.array([
-        [0, 0, 0],    # Min corner
-        [15, 15, 15], # Max corner
-        [0, 15, 0],   # Edge points
-        [15, 0, 0],
-        [0, 0, 15],
-        [8, 8, 8],    # Center point
-    ], dtype=np.int64)
-
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
-
-    # Sort points for comparison
-    original_sorted = np.array(sorted(map(tuple, points)))
-    reconstructed_sorted = np.array(sorted(map(tuple, reconstructed_points)))
-
-    np.testing.assert_array_equal(
-        original_sorted,
-        reconstructed_sorted,
-        err_msg="Boundary points not reconstructed correctly"
-    )
-
-def test_odd_sized_bbox():
-    """Test with a bounding box of odd dimensions."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [17, 15, 13]  # Odd dimensions
-    level = 4
-
-    points = np.array([
-        [16, 14, 12],  # Near max corner
-        [1, 1, 1],     # Near min corner
-        [8, 7, 6],     # Middle points
-        [9, 8, 7],
-    ], dtype=np.int64)
-
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
-
-    # Sort points for comparison
-    original_sorted = np.array(sorted(map(tuple, points)))
-    reconstructed_sorted = np.array(sorted(map(tuple, reconstructed_points)))
-
-    np.testing.assert_array_equal(
-        original_sorted,
-        reconstructed_sorted,
-        err_msg="Points in odd-sized bbox not reconstructed correctly"
-    )
-
-def test_invalid_inputs():
-    """Test handling of invalid inputs."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [16, 16, 16]
-    level = 4
-
-    # Test with points outside bbox
-    points = np.array([[20, 20, 20]], dtype=np.int64)
-    with pytest.raises(AssertionError):
-        blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-
-    # Test with invalid level
-    points = np.array([[8, 8, 8]], dtype=np.int64)
-    with pytest.raises(AssertionError):
-        blocks, binstr = partition_octree(points, bbox_min, bbox_max, 5)  # level > geometric level
-
-def test_dense_points():
-    """Test with densely packed points."""
-    bbox_min = [0, 0, 0]
-    bbox_max = [4, 4, 4]
-    level = 2
-
-    # Create a dense 4x4x4 grid of points
-    x, y, z = np.meshgrid(np.arange(4), np.arange(4), np.arange(4))
-    points = np.stack([x.flatten(), y.flatten(), z.flatten()], axis=1).astype(np.int64)
-
-    blocks, binstr = partition_octree(points, bbox_min, bbox_max, level)
-    reconstructed_points = departition_octree(blocks, binstr, bbox_min, bbox_max, level)
-
-    # Sort points for comparison
-    original_sorted = np.array(sorted(map(tuple, points)))
-    reconstructed_sorted = np.array(sorted(map(tuple, reconstructed_points)))
-
-    np.testing.assert_array_equal(
-        original_sorted,
-        reconstructed_sorted,
-        err_msg="Dense point grid not reconstructed correctly"
-    )
-
-if __name__ == '__main__':
-    pytest.main([__file__])
+if __name__ == "__main__":
+    unittest.main()
