@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import numpy as np
-import tensorflow.compat.v1 as tf
+# import tensorflow.compat.v1 as tf
 import argparse
 import gzip
 from tqdm import trange

@@ -1,84 +1,99 @@
+# model_opt.py
+
+# Import required libraries
+import tensorflow as tf
+from tensorflow.keras import layers
 import numpy as np
-import logging
-from scipy.spatial.ckdtree import cKDTree
-from utils.pc_metric import validate_opt_metrics, compute_metrics
 
-logger = logging.getLogger(__name__)
+# Loss function for Chamfer Distance
+def chamfer_distance(pc1, pc2):
+    """
+    Compute the Chamfer Distance between two point clouds.
 
+    Args:
+        pc1: First point cloud as a tensor of shape (N, D).
+        pc2: Second point cloud as a tensor of shape (M, D).
 
-def build_points_threshold(x_hat, thresholds, len_block, max_delta=np.inf):
-    pa_list = []
-    for i, t in enumerate(thresholds):
-        pa = np.argwhere(x_hat > t).astype('float32')
-        if len(pa) == 0:
-            break
-        len_ratio = len(pa) / len_block
-        if (1 / max_delta) < len_ratio < max_delta:
-            pa_list.append((i, pa))
-    return pa_list
+    Returns:
+        tf.Tensor: Chamfer distance between pc1 and pc2.
+    """
+    diff1 = tf.reduce_mean(tf.reduce_min(tf.norm(pc1[:, None] - pc2[None, :], axis=-1), axis=1))
+    diff2 = tf.reduce_mean(tf.reduce_min(tf.norm(pc2[:, None] - pc1[None, :], axis=-1), axis=1))
+    return diff1 + diff2
 
+# Model definition for point cloud compression
+class PointCloudAutoencoder(tf.keras.Model):
+    def __init__(self):
+        super(PointCloudAutoencoder, self).__init__()
+        # Encoder
+        self.encoder = tf.keras.Sequential([
+            layers.InputLayer(input_shape=(64, 64, 64, 1)),
+            layers.Conv3D(32, (3, 3, 3), activation='relu', padding='same'),
+            layers.AveragePooling3D((2, 2, 2)),
+            layers.Conv3D(64, (3, 3, 3), activation='relu', padding='same'),
+            layers.AveragePooling3D((2, 2, 2)),
+        ])
+        # Bottleneck
+        self.bottleneck = layers.Conv3D(128, (3, 3, 3), activation='relu', padding='same')
+        # Decoder
+        self.decoder = tf.keras.Sequential([
+            layers.Conv3DTranspose(64, (3, 3, 3), activation='relu', padding='same'),
+            layers.UpSampling3D((2, 2, 2)),
+            layers.Conv3DTranspose(32, (3, 3, 3), activation='relu', padding='same'),
+            layers.UpSampling3D((2, 2, 2)),
+            layers.Conv3D(1, (3, 3, 3), activation='sigmoid', padding='same'),
+        ])
+        # Optimizer
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
 
-def compute_optimal_thresholds(block, x_hat, thresholds, resolution, normals=None, opt_metrics=['d1_mse'],
-                               max_deltas=[np.inf], fixed_threshold=False):
-    validate_opt_metrics(opt_metrics, with_normals=normals is not None)
-    assert len(max_deltas) > 0
-    best_thresholds = []
-    ret_opt_metrics = [f'{opt_metric}_{max_delta}' for max_delta in max_deltas for opt_metric in opt_metrics]
-    if fixed_threshold:
-        #half_thr = len(thresholds) // 2
-        #half_pa = np.argwhere(x_hat > thresholds[half_thr]).astype('float32')
-        # here we copy learned PCGC - we send over the location of the threshold which allows = number of points
-        # this saves > 300 seconds per mesh we compress, and also means we theoretically don't need to run the
-        # sythesis network to obtain samples
-        flat_thr = x_hat.flatten()
-        flat_thr.sort()
-        flat_thr = flat_thr[-len(block)]
-        half_pa = np.argwhere(x_hat > flat_thr).astype('float32')
-        logger.info(f'Fixed threshold {half_thr}/{len(thresholds)} with {len(half_pa)}/{len(block)} points (ratio {len(half_pa)/len(block):.2f})')
-        return ret_opt_metrics, [int(256*flat_thr)] * len(max_deltas) * len(opt_metrics)
+    def call(self, inputs):
+        x = self.encoder(inputs)
+        x = self.bottleneck(x)
+        return self.decoder(x)
 
-    pa_list = build_points_threshold(x_hat, thresholds, len(block))
-    max_threshold_idx = len(thresholds) - 1
-    if len(pa_list) == 0:
-        return ret_opt_metrics, [max_threshold_idx] * len(opt_metrics)
+# Preprocessing function for point clouds
+def preprocess_point_cloud(point_cloud, voxel_size=0.05):
+    """
+    Preprocess a point cloud by voxelization using TensorFlow operations.
 
-    t1 = cKDTree(block[:, :3], balanced_tree=False)
-    pa_metrics = [compute_metrics(block[:, :3], pa, resolution - 1, p1_n=normals, t1=t1) for _, pa in pa_list]
+    Args:
+        point_cloud (tf.Tensor): Tensor of shape (N, 3) representing the point cloud.
+        voxel_size (float): Size of each voxel.
 
-    log_message = f'Processing max_deltas {max_deltas} on block with {len(block)} points'
-    for max_delta in max_deltas:
-        if max_delta is not None:
-            cur_pa_list = build_points_threshold(x_hat, thresholds, len(block), max_delta)
-            if len(cur_pa_list) > 0:
-                idx_mask = [x[0] for x in cur_pa_list]
-                cur_pa_metrics = [pa_metrics[i] for i in idx_mask]
-            else:
-                cur_pa_list = pa_list
-                cur_pa_metrics = pa_metrics
-        else:
-            cur_pa_list = pa_list
-            cur_pa_metrics = pa_metrics
-        log_message += f'\n{len(cur_pa_list)}/{len(thresholds)} thresholds eligible for max_delta {max_delta}'
-        for opt_metric in opt_metrics:
-            best_threshold_idx = np.argmin([x[opt_metric] for x in cur_pa_metrics])
-            cur_best_metric = cur_pa_metrics[best_threshold_idx][opt_metric]
+    Returns:
+        tf.Tensor: Preprocessed point cloud with points snapped to a voxel grid.
+    """
+    # Quantize point cloud to voxel grid
+    quantized = tf.math.round(point_cloud / voxel_size) * voxel_size
 
-            # Check for failure scenarios
-            mean_point_metric = compute_metrics(block[:, :3],
-                                                np.round(np.mean(block[:, :3], axis=0))[np.newaxis, :],
-                                                resolution - 1, p1_n=normals, t1=t1)[opt_metric]
-            # In case a single point is better than the network output, this is a failure case
-            # Do not output any points
-            if cur_best_metric > mean_point_metric:
-                best_threshold_idx = max_threshold_idx
-                final_idx = best_threshold_idx
-                log_message += f', {opt_metric} {final_idx} 0/{len(block)}, metric {cur_best_metric:.2e} > mean point metric {mean_point_metric:.2e}'
-            else:
-                final_idx = cur_pa_list[best_threshold_idx][0]
-                cur_n_points = len(cur_pa_list[best_threshold_idx][1])
-                log_message += f', {opt_metric} {final_idx} {cur_n_points}/{len(block)} points (ratio {cur_n_points/len(block):.2f}) {cur_best_metric :.2e} < mean point metric {mean_point_metric:.2e}'
-            best_thresholds.append(final_idx)
-    logger.info(log_message)
-    assert len(ret_opt_metrics) == len(best_thresholds)
+    # Remove duplicate points
+    unique_quantized = tf.unique(tf.reshape(quantized, [-1, 3]))[0]
 
-    return ret_opt_metrics, best_thresholds
+    return unique_quantized
+
+# Training function
+def train_autoencoder(autoencoder, dataset, epochs=10, batch_size=8):
+    """
+    Train the point cloud autoencoder.
+
+    Args:
+        autoencoder (PointCloudAutoencoder): Autoencoder model.
+        dataset (tf.data.Dataset): Dataset for training.
+        epochs (int): Number of epochs.
+        batch_size (int): Batch size.
+
+    Returns:
+        None
+    """
+    for epoch in range(epochs):
+        for batch in dataset.batch(batch_size):
+            with tf.GradientTape() as tape:
+                reconstructed = autoencoder(batch, training=True)
+                loss = chamfer_distance(batch, reconstructed)
+            gradients = tape.gradient(loss, autoencoder.trainable_variables)
+            autoencoder.optimizer.apply_gradients(zip(gradients, autoencoder.trainable_variables))
+
+        print(f"Epoch {epoch + 1}, Loss: {loss.numpy():.4f}")
+
+# Explicit exports
+__all__ = ['PointCloudAutoencoder', 'chamfer_distance', 'preprocess_point_cloud', 'train_autoencoder']
