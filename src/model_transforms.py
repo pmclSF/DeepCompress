@@ -1,10 +1,10 @@
 from enum import Enum
-import tensorflow.compat.v1 as tf
-from tensorflow.keras.layers import Layer, Conv3D, Conv3DTranspose, AveragePooling3D
-from tensorflow_core.python.keras.utils import conv_utils
+# import tensorflow.compat.v1 as tf
+# from tensorflow.keras.layers import Layer, Conv3D, Conv3DTranspose, AveragePooling3D
+# from tensorflow_core.python.keras.utils import conv_utils
 
-import tensorflow_compression as tfc
-import tensorflow.keras as keras
+# import tensorflow_compression as tfc
+# import tensorflow.keras as keras
 
 def relu():
     return keras.activations.relu
