@@ -1,63 +1,84 @@
-import sys
+import unittest
 import os
-import time
-import tempfile
-import pytest
+import yaml
+from experiment import Experiment, ExperimentConfig
 
-# Add the 'src' directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+class TestExperimentConfig(unittest.TestCase):
 
-from utils.experiment import timing, assert_exists, validate_experiment_params, prepare_experiment_dir
+    def setUp(self):
+        """Set up a temporary configuration file for testing."""
+        self.test_config_path = "test_config.yml"
+        self.test_config = {
+            "dataset_path": "./test_dataset",
+            "experiment_dir": "./test_experiment",
+            "model_configs": [
+                {"model": "model1", "params": {"lr": 0.001}},
+                {"model": "model2", "params": {"lr": 0.01}}
+            ],
+            "metrics": ["accuracy", "loss"]
+        }
 
-def slow_function(duration):
-    time.sleep(duration)
+        os.makedirs(self.test_config["dataset_path"], exist_ok=True)
+        with open(self.test_config_path, "w") as f:
+            yaml.dump(self.test_config, f)
 
-@timing
-def decorated_slow_function(duration):
-    time.sleep(duration)
+    def tearDown(self):
+        """Clean up the temporary files and directories."""
+        if os.path.exists(self.test_config_path):
+            os.remove(self.test_config_path)
+        if os.path.exists(self.test_config["dataset_path"]):
+            os.rmdir(self.test_config["dataset_path"])
+        if os.path.exists(self.test_config["experiment_dir"]):
+            os.rmdir(self.test_config["experiment_dir"])
 
-def test_timing_decorator():
-    # Test the function without decorator
-    start_time = time.time()
-    slow_function(1)
-    elapsed_time = time.time() - start_time
-    assert elapsed_time >= 1, "Function did not run for the expected duration"
+    def test_load_config(self):
+        """Test loading configuration from YAML file."""
+        config = ExperimentConfig(self.test_config_path)
+        self.assertEqual(config.get("dataset_path"), self.test_config["dataset_path"])
+        self.assertEqual(config.get("experiment_dir"), self.test_config["experiment_dir"])
+        self.assertEqual(config.get("model_configs"), self.test_config["model_configs"])
+        self.assertEqual(config.get("metrics"), self.test_config["metrics"])
 
-    # Test the decorated function
-    start_time = time.time()
-    decorated_slow_function(1)
-    elapsed_time = time.time() - start_time
-    assert elapsed_time >= 1, "Decorated function did not run for the expected duration"
+    def test_validate_config(self):
+        """Test configuration validation."""
+        config = ExperimentConfig(self.test_config_path)
+        self.assertTrue(os.path.exists(config.get("dataset_path")))
+        self.assertTrue(os.path.exists(config.get("experiment_dir")))
 
-    # Validate that the decorator doesn't modify the return value
-    assert decorated_slow_function(0) is None, "Decorator altered the function output"
+class TestExperiment(unittest.TestCase):
 
-def test_assert_exists():
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Test with an existing directory
-        assert_exists(temp_dir)
+    def setUp(self):
+        """Set up a temporary configuration file and experiment."""
+        self.test_config_path = "test_config.yml"
+        self.test_config = {
+            "dataset_path": "./test_dataset",
+            "experiment_dir": "./test_experiment",
+            "model_configs": [
+                {"model": "model1", "params": {"lr": 0.001}},
+                {"model": "model2", "params": {"lr": 0.01}}
+            ],
+            "metrics": ["accuracy", "loss"]
+        }
 
-        # Test with a non-existing directory
-        non_existing_dir = os.path.join(temp_dir, 'non_existing')
-        with pytest.raises(FileNotFoundError):
-            assert_exists(non_existing_dir)
+        os.makedirs(self.test_config["dataset_path"], exist_ok=True)
+        with open(self.test_config_path, "w") as f:
+            yaml.dump(self.test_config, f)
 
-def test_validate_experiment_params():
-    params = {'key1': 'value1', 'key2': 'value2'}
-    required_keys = ['key1', 'key2']
+        self.experiment = Experiment(self.test_config_path)
 
-    # Test with all required keys present
-    validate_experiment_params(params, required_keys)
+    def tearDown(self):
+        """Clean up the temporary files and directories."""
+        if os.path.exists(self.test_config_path):
+            os.remove(self.test_config_path)
+        if os.path.exists(self.test_config["dataset_path"]):
+            os.rmdir(self.test_config["dataset_path"])
+        if os.path.exists(self.test_config["experiment_dir"]):
+            os.rmdir(self.test_config["experiment_dir"])
 
-    # Test with missing keys
-    missing_keys = ['key1', 'key3']
-    with pytest.raises(ValueError):
-        validate_experiment_params(params, missing_keys)
+    def test_run_experiment(self):
+        """Test running the experiment pipeline."""
+        self.experiment.run()
+        self.assertTrue(os.path.exists(self.test_config["experiment_dir"]), "Experiment directory should exist.")
 
-def test_prepare_experiment_dir():
-    with tempfile.TemporaryDirectory() as base_dir:
-        experiment_name = 'test_experiment'
-
-        # Test creating an experiment directory
-        experiment_dir = prepare_experiment_dir(base_dir, experiment_name)
-        assert os.path.exists(experiment_dir), "Experiment directory was not created"
+if __name__ == "__main__":
+    unittest.main()
