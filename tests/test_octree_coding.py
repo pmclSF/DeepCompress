@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src'
 
 import numpy as np
 import pytest
-from src.octree_coding import partition_octree, departition_octree
+from octree_coding import partition_octree, departition_octree
 
 def test_partition_and_departition():
     """Test basic partitioning and reconstruction of points."""
