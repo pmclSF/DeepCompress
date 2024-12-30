@@ -1,122 +1,107 @@
-from typing import Tuple
 import numpy as np
+import argparse
+from pathlib import Path
+from typing import Optional
 
-def compute_new_bbox(idx: int, bbox_min: np.ndarray, bbox_max: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    bbox_min = np.asarray(bbox_min, dtype=np.int64)
-    bbox_max = np.asarray(bbox_max, dtype=np.int64)
-    midpoint = (bbox_max + bbox_min) // 2
 
-    cur_bbox_min = bbox_min.copy()
-    cur_bbox_max = midpoint.copy()
+def read_off(file_path: str) -> Optional[np.ndarray]:
+    """
+    Reads a 3D mesh from an OFF file and returns the vertices.
 
-    if idx & 1:
-        cur_bbox_min[0] = midpoint[0]
-        cur_bbox_max[0] = bbox_max[0]
-    if (idx >> 1) & 1:
-        cur_bbox_min[1] = midpoint[1]
-        cur_bbox_max[1] = bbox_max[1]
-    if (idx >> 2) & 1:
-        cur_bbox_min[2] = midpoint[2]
-        cur_bbox_max[2] = bbox_max[2]
+    Args:
+        file_path (str): Path to the OFF file.
 
-    return cur_bbox_min, cur_bbox_max
+    Returns:
+        np.ndarray: An array of shape (N, 3) containing the vertices of the mesh.
+    """
+    try:
+        with open(file_path, 'r') as file:
+            header = file.readline().strip()
+            if header != "OFF":
+                raise ValueError("Not a valid OFF file")
 
-def split_octree(points: np.ndarray, bbox_min: np.ndarray, bbox_max: np.ndarray):
-    if len(points) == 0:
-        return [[] for _ in range(8)], 0, []
+            n_verts, n_faces, _ = map(int, file.readline().strip().split())
+            vertices = []
 
-    bbox_min = np.asarray(bbox_min, dtype=np.int64)
-    bbox_max = np.asarray(bbox_max, dtype=np.int64)
-    midpoint = (bbox_max + bbox_min) // 2
+            for _ in range(n_verts):
+                vertex = list(map(float, file.readline().strip().split()))
+                vertices.append(vertex)
 
-    ret_points = [[] for _ in range(8)]
-    binstr = 0
-    global_bboxes = [compute_new_bbox(i, bbox_min, bbox_max) for i in range(8)]
+            return np.array(vertices, dtype=np.float32)
 
-    for point in points:
-        loc = 0
-        if point[0] > midpoint[0]: loc |= 1
-        if point[1] > midpoint[1]: loc |= 2
-        if point[2] > midpoint[2]: loc |= 4
-        ret_points[loc].append(point)
-        binstr |= (1 << loc)
+    except Exception as e:
+        print(f"Error reading OFF file {file_path}: {e}")
+        return None
 
-    ret_arrays = [np.array(pts) if pts else np.array([], dtype=np.int64).reshape(0, points.shape[1]) 
-                 for pts in ret_points]
-    return ret_arrays, binstr, global_bboxes
 
-def partition_octree(points: np.ndarray, bbox_min: np.ndarray, bbox_max: np.ndarray, level: int):
-    if len(points) == 0 or level == 0:
-        return [points], []
+def sample_points_from_mesh(vertices: np.ndarray, num_points: int = 2048) -> np.ndarray:
+    """
+    Uniformly samples points from the surface of the mesh represented by its vertices.
 
-    ret_points, binstr, local_bboxes = split_octree(points, bbox_min, bbox_max)
-    
-    blocks = []
-    new_binstr = [binstr]
+    Args:
+        vertices (np.ndarray): Array of shape (N, 3) representing vertices of the mesh.
+        num_points (int): Number of points to sample.
 
-    for i, rp in enumerate(ret_points):
-        if len(rp) > 0:
-            child_min, child_max = local_bboxes[i]
-            sub_blocks, sub_binstr = partition_octree(rp, child_min, child_max, level - 1)
-            blocks.extend(sub_blocks)
-            new_binstr.extend(sub_binstr)
+    Returns:
+        np.ndarray: Sampled points as a numpy array of shape (num_points, 3).
+    """
+    # Placeholder implementation for uniform sampling; can be replaced with an actual algorithm.
+    indices = np.random.choice(vertices.shape[0], size=num_points, replace=False)
+    return vertices[indices]
 
-    return blocks, new_binstr
 
-def departition_octree(blocks: list, binstr_list: list, bbox_min: np.ndarray, bbox_max: np.ndarray, level: int):
-    bbox_min = np.asarray(bbox_min, dtype=np.int64)
-    bbox_max = np.asarray(bbox_max, dtype=np.int64)
+def save_ply(file_path: str, point_cloud: np.ndarray):
+    """
+    Saves a point cloud to a PLY file.
 
-    if not binstr_list or len(blocks) == 0:
-        return blocks[0] if blocks else np.array([])
+    Args:
+        file_path (str): Path to the output PLY file.
+        point_cloud (np.ndarray): An array of shape (N, 3) containing the points.
+    """
+    try:
+        with open(file_path, 'w') as file:
+            file.write("ply\n")
+            file.write("format ascii 1.0\n")
+            file.write(f"element vertex {point_cloud.shape[0]}\n")
+            file.write("property float x\n")
+            file.write("property float y\n")
+            file.write("property float z\n")
+            file.write("end_header\n")
 
-    points = []
-    binstr_idx = 0
-    block_idx = 0
+            for point in point_cloud:
+                file.write(f"{point[0]} {point[1]} {point[2]}\n")
 
-    def process_node(cur_min, cur_max, cur_level):
-        nonlocal binstr_idx, block_idx
+    except Exception as e:
+        print(f"Error saving PLY file {file_path}: {e}")
 
-        if cur_level == level:
-            if block_idx >= len(blocks):
-                return
-            points.extend(blocks[block_idx])
-            block_idx += 1
-        else:
-            if binstr_idx >= len(binstr_list):
-                return
 
-            binstr = binstr_list[binstr_idx]
-            binstr_idx += 1
+def convert_mesh_to_point_cloud(input_path: str, output_path: str, num_points: int = 2048):
+    """
+    Converts a 3D mesh in OFF format to a point cloud and saves it in PLY format.
 
-            for oct_idx in range(8):
-                if binstr & (1 << oct_idx):
-                    child_min, child_max = compute_new_bbox(oct_idx, cur_min, cur_max)
-                    process_node(child_min, child_max, cur_level + 1)
+    Args:
+        input_path (str): Path to the input OFF file.
+        output_path (str): Path to the output PLY file.
+        num_points (int): Number of points to sample from the mesh.
+    """
+    vertices = read_off(input_path)
+    if vertices is not None:
+        sampled_points = sample_points_from_mesh(vertices, num_points=num_points)
+        save_ply(output_path, sampled_points)
+        print(f"Conversion successful: {output_path}")
+    else:
+        print(f"Conversion failed for {input_path}")
 
-    process_node(bbox_min, bbox_max, 0)
-    return np.array(points)
 
-    def process_node(cur_min, cur_max, cur_level):
-        nonlocal binstr_idx, block_idx
+def main():
+    parser = argparse.ArgumentParser(description="Convert 3D mesh (OFF) to point cloud (PLY) with sampling.")
+    parser.add_argument("input", type=str, help="Path to the input OFF file.")
+    parser.add_argument("output", type=str, help="Path to the output PLY file.")
+    parser.add_argument("--num_points", type=int, default=2048, help="Number of points to sample from the mesh (default: 2048).")
 
-        if cur_level == level:
-            if block_idx >= len(blocks):
-                return
-            global_points = blocks[block_idx].copy()
-            points_list.append(global_points)
-            block_idx += 1
-        else:
-            if binstr_idx >= len(binstr_list):
-                return
+    args = parser.parse_args()
+    convert_mesh_to_point_cloud(args.input, args.output, args.num_points)
 
-            binstr = binstr_list[binstr_idx]
-            binstr_idx += 1
 
-            for oct_idx in range(8):
-                if binstr & (1 << oct_idx):
-                    child_min, child_max = compute_new_bbox(oct_idx, cur_min, cur_max)
-                    process_node(child_min, child_max, cur_level + 1)
-
-    process_node(bbox_min, bbox_max, 0)
-    return np.concatenate(points_list, axis=0) if points_list else np.array([])
+if __name__ == "__main__":
+    main()

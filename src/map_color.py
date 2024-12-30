@@ -1,43 +1,113 @@
+import numpy as np
 import argparse
-import logging
+from pathlib import Path
+from typing import Optional
 
-from utils.parallel_process import Popen
+def load_point_cloud(file_path: str) -> Optional[np.ndarray]:
+    """
+    Load a point cloud from a PLY file.
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-    datefmt="%Y-%m-%d %H:%M:%S")
-logger = logging.getLogger(__name__)
+    Args:
+        file_path (str): Path to the PLY file.
 
-import pandas as pd
-from pyntcloud import PyntCloud
+    Returns:
+        np.ndarray: An array of shape (N, 3) containing the points of the cloud.
+    """
+    try:
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+            start = lines.index("end_header\n") + 1
+            points = [list(map(float, line.split()[:3])) for line in lines[start:]]
+            return np.array(points, dtype=np.float32)
+    except Exception as e:
+        print(f"Error loading point cloud from {file_path}: {e}")
+        return None
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='map_color.py',
-                                     description='Map colors from one PC to another.',
-                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def load_colors(file_path: str) -> Optional[np.ndarray]:
+    """
+    Load colors from a PLY file.
 
-    parser.add_argument('ori_file', help='Original directory.')
-    parser.add_argument('target_file', help='Mesh detection pattern.')
-    parser.add_argument('output_file', help='Decompressed directory.')
+    Args:
+        file_path (str): Path to the PLY file.
+
+    Returns:
+        np.ndarray: An array of shape (N, 3) containing RGB colors.
+    """
+    try:
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+            start = lines.index("end_header\n") + 1
+            colors = [list(map(float, line.split()[3:6])) for line in lines[start:] if len(line.split()) > 3]
+            return np.array(colors, dtype=np.float32) / 255.0
+    except Exception as e:
+        print(f"Error loading colors from {file_path}: {e}")
+        return None
+
+def transfer_colors(source_points: np.ndarray, source_colors: np.ndarray, target_points: np.ndarray) -> np.ndarray:
+    """
+    Transfer colors from a source point cloud to a target point cloud based on nearest neighbors.
+
+    Args:
+        source_points (np.ndarray): Array of shape (N, 3) for source point cloud.
+        source_colors (np.ndarray): Array of shape (N, 3) for source colors.
+        target_points (np.ndarray): Array of shape (M, 3) for target point cloud.
+
+    Returns:
+        np.ndarray: Array of shape (M, 3) containing colors for the target cloud.
+    """
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(source_points)
+    _, indices = tree.query(target_points, k=1)
+    return source_colors[indices]
+
+def save_colored_point_cloud(file_path: str, points: np.ndarray, colors: np.ndarray):
+    """
+    Save a colored point cloud to a PLY file.
+
+    Args:
+        file_path (str): Path to the output PLY file.
+        points (np.ndarray): Array of shape (N, 3) for point coordinates.
+        colors (np.ndarray): Array of shape (N, 3) for RGB colors.
+    """
+    try:
+        with open(file_path, 'w') as file:
+            file.write("ply\n")
+            file.write("format ascii 1.0\n")
+            file.write(f"element vertex {points.shape[0]}\n")
+            file.write("property float x\n")
+            file.write("property float y\n")
+            file.write("property float z\n")
+            file.write("property uchar red\n")
+            file.write("property uchar green\n")
+            file.write("property uchar blue\n")
+            file.write("end_header\n")
+
+            for point, color in zip(points, colors):
+                r, g, b = (color * 255).astype(int)
+                file.write(f"{point[0]} {point[1]} {point[2]} {r} {g} {b}\n")
+    except Exception as e:
+        print(f"Error saving colored point cloud to {file_path}: {e}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Transfer colors from one point cloud to another.")
+    parser.add_argument("source", type=str, help="Path to the source PLY file with colors.")
+    parser.add_argument("target", type=str, help="Path to the target PLY file without colors.")
+    parser.add_argument("output", type=str, help="Path to the output PLY file with transferred colors.")
+
     args = parser.parse_args()
 
-    ori_pc = PyntCloud.from_file(args.ori_file)
-    ori_points = ori_pc.points
-    target_pc = PyntCloud.from_file(args.target_file)
-    target_points = target_pc.points[['x', 'y', 'z']]
+    source_points = load_point_cloud(args.source)
+    source_colors = load_colors(args.source)
+    target_points = load_point_cloud(args.target)
 
-    kdid = ori_pc.add_structure('kdtree')
-    kdtree = ori_pc.structures[kdid]
+    if source_points is None or source_colors is None or target_points is None:
+        print("Error: Unable to load one or more point clouds.")
+        return
 
-    mapped_indices = kdtree.query(target_pc.points[['x', 'y', 'z']].values, k=2, n_jobs=-1)[1][:, 1]
-    mapped_colors = ori_points[['red', 'green', 'blue']].iloc[mapped_indices]
-    mapped_colors.index = target_points.index
+    target_colors = transfer_colors(source_points, source_colors, target_points)
+    save_colored_point_cloud(args.output, target_points, target_colors)
+    print(f"Color transfer complete. Output saved to {args.output}")
 
-    output_points = pd.concat([target_points, mapped_colors], axis=1)
-    output_pc = PyntCloud(output_points)
-    output_pc.to_file(args.output_file)
-
-
-def run_mapcolor(input_pc, target_file, output_file):
-    return Popen(['python', 'map_color.py', input_pc, target_file, output_file])
+if __name__ == "__main__":
+    main()
