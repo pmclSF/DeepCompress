@@ -1,74 +1,93 @@
+import yaml
 import os
-import time
 import logging
-from functools import wraps
+from typing import Dict, Any
 
-logger = logging.getLogger(__name__)
+class ExperimentConfig:
+    def __init__(self, config_path: str):
+        """
+        Load and validate experiment configuration from a YAML file.
 
-def timing(func):
-    """
-    Decorator to measure the execution time of a function.
+        Args:
+            config_path (str): Path to the configuration YAML file.
+        """
+        self.config_path = config_path
+        self.config = self._load_config()
+        self._validate_config()
 
-    Args:
-        func (callable): Function to be timed.
+    def _load_config(self) -> Dict[str, Any]:
+        """Load configuration from a YAML file."""
+        try:
+            with open(self.config_path, 'r') as file:
+                return yaml.safe_load(file)
+        except Exception as e:
+            logging.error(f"Failed to load configuration file: {e}")
+            raise
 
-    Returns:
-        callable: Wrapped function with timing enabled.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        elapsed_time = time.time() - start_time
-        logger.info(f"{func.__name__} executed in {elapsed_time:.2f} seconds.")
-        return result
+    def _validate_config(self):
+        """Validate the experiment configuration."""
+        required_keys = ["dataset_path", "experiment_dir", "model_configs", "metrics"]
+        for key in required_keys:
+            if key not in self.config:
+                raise ValueError(f"Missing required configuration key: {key}")
 
-    return wrapper
+        # Validate paths
+        if not os.path.exists(self.config["dataset_path"]):
+            raise ValueError(f"Dataset path does not exist: {self.config['dataset_path']}")
 
-@timing
-def assert_exists(path):
-    """
-    Assert that the given path exists. Raises an error if it doesn't.
-    
-    Args:
-        path (str): Path to check.
-    Raises:
-        FileNotFoundError: If the path does not exist.
-    """
-    if not os.path.exists(path):
-        logger.error(f"Required path does not exist: {path}")
-        raise FileNotFoundError(f"Path does not exist: {path}")
-    logger.info(f"Validated existence of path: {path}")
+        os.makedirs(self.config["experiment_dir"], exist_ok=True)
 
-@timing
-def validate_experiment_params(params, required_keys):
-    """
-    Validate that the experiment parameters contain all required keys.
-    
-    Args:
-        params (dict): Experiment parameters to validate.
-        required_keys (list): List of keys that must be present in params.
-    Raises:
-        ValueError: If any required key is missing.
-    """
-    missing_keys = [key for key in required_keys if key not in params]
-    if missing_keys:
-        logger.error(f"Missing required experiment parameters: {missing_keys}")
-        raise ValueError(f"Missing required experiment parameters: {missing_keys}")
-    logger.info("All required experiment parameters are present.")
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a value from the configuration."""
+        return self.config.get(key, default)
 
-@timing
-def prepare_experiment_dir(base_dir, experiment_name):
-    """
-    Prepare the directory for a specific experiment, ensuring it exists.
-    
-    Args:
-        base_dir (str): Base directory for experiments.
-        experiment_name (str): Name of the experiment.
-    Returns:
-        str: Full path to the experiment directory.
-    """
-    experiment_dir = os.path.join(base_dir, experiment_name)
-    os.makedirs(experiment_dir, exist_ok=True)
-    logger.info(f"Prepared experiment directory: {experiment_dir}")
-    return experiment_dir
+class Experiment:
+    def __init__(self, config_path: str):
+        """
+        Initialize an experiment based on a configuration file.
+
+        Args:
+            config_path (str): Path to the configuration YAML file.
+        """
+        self.config = ExperimentConfig(config_path)
+        self.logger = self._setup_logger()
+
+    def _setup_logger(self):
+        """Setup logging for the experiment."""
+        logger = logging.getLogger("Experiment")
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+        logger.addHandler(handler)
+        return logger
+
+    def run(self):
+        """Run the experiment pipeline."""
+        self.logger.info("Starting experiment.")
+
+        # Example: Iterate through model configurations
+        model_configs = self.config.get("model_configs")
+        for model_config in model_configs:
+            self.logger.info(f"Running model configuration: {model_config}")
+            # Placeholder for model training or evaluation
+            self._run_model_pipeline(model_config)
+
+        self.logger.info("Experiment completed.")
+
+    def _run_model_pipeline(self, model_config: Dict[str, Any]):
+        """Run a single model pipeline based on the configuration."""
+        # Placeholder for actual training/evaluation logic
+        self.logger.info(f"Processing configuration: {model_config}")
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run an experiment based on a configuration file.")
+    parser.add_argument("config", type=str, help="Path to the experiment configuration YAML file.")
+
+    args = parser.parse_args()
+
+    experiment = Experiment(args.config)
+    experiment.run()

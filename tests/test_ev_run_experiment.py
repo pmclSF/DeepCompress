@@ -1,104 +1,103 @@
-import sys
+import unittest
 import os
-import time
-import tempfile
-import pytest
 import yaml
+from unittest.mock import patch, MagicMock
+from ev_run_experiment import load_experiment_config, prepare_experiment_params, run_experiment
+import shutil
 
-# Add the 'src' directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+class TestEvRunExperiment(unittest.TestCase):
 
-from ev_run_experiment import run_experiment
+    def setUp(self):
+        """Set up temporary configuration and environment for testing."""
+        self.test_config_path = "test_experiment.yml"
+        self.test_config = {
+            "MPEG_TMC13_DIR": "./mpeg_tmc13",
+            "PCERROR": "./pc_error",
+            "MPEG_DATASET_DIR": "./mpeg_dataset",
+            "EXPERIMENT_DIR": "./experiment_dir",
+            "model_configs": [
+                {
+                    "id": "model1",
+                    "config": "config1",
+                    "lambdas": [1e-4, 1e-5]
+                }
+            ],
+            "opt_metrics": ["metric1"],
+            "max_deltas": [0.1],
+            "data": [
+                {
+                    "pc_name": "test_pc",
+                    "cfg_name": "test_cfg",
+                    "input_pc": "input_pc.ply",
+                    "input_norm": "input_norm.ply"
+                }
+            ]
+        }
 
-def create_dummy_experiment_file():
-    """Create a dummy YAML experiment file for testing."""
-    temp_dataset_dir = tempfile.mkdtemp()  # Create a temporary directory for dataset
-    temp_experiment_dir = tempfile.mkdtemp()  # Create a temporary directory for experiments
+        # Create necessary directories
+        for dir_path in [
+            self.test_config["MPEG_DATASET_DIR"],
+            self.test_config["EXPERIMENT_DIR"]
+        ]:
+            os.makedirs(dir_path, exist_ok=True)
 
-    experiments = {
-        'MPEG_TMC13_DIR': '/path/to/tmc13',  # This can remain as a placeholder if not used
-        'PCERROR': '/path/to/pcerror',  # Placeholder if not validated
-        'MPEG_DATASET_DIR': temp_dataset_dir,
-        'EXPERIMENT_DIR': temp_experiment_dir,
-        'pcerror_mpeg_mode': 'default',
-        'model_configs': [
-            {
-                'id': 'model_1',
-                'config': 'config_1',
-                'lambdas': [0.01, 0.1],
-                'opt_metrics': ['d1', 'd2'],
-                'max_deltas': [1, 2],
-                'fixed_threshold': True
-            }
-        ],
-        'opt_metrics': ['d1', 'd2'],
-        'max_deltas': [1, 2],
-        'fixed_threshold': True,
-        'data': [
-            {
-                'pc_name': 'test_pc',
-                'cfg_name': 'cfg_1',
-                'input_pc': 'input_pc.ply',
-                'input_norm': 'input_norm.ply'
-            }
-        ]
-    }
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".yaml")
-    with open(temp_file.name, 'w') as f:
-        yaml.dump(experiments, f)
+        with open(self.test_config_path, "w") as f:
+            yaml.dump(self.test_config, f)
 
-    return temp_file.name, temp_dataset_dir, temp_experiment_dir
+    def tearDown(self):
+        """Clean up temporary files and directories."""
+        # Remove test configuration file
+        if os.path.exists(self.test_config_path):
+            os.remove(self.test_config_path)
+        
+        # Remove test directories
+        for dir_path in [
+            self.test_config["MPEG_DATASET_DIR"],
+            self.test_config["EXPERIMENT_DIR"]
+        ]:
+            if os.path.exists(dir_path):
+                shutil.rmtree(dir_path)
 
+    def test_load_experiment_config(self):
+        """Test loading configuration from YAML file."""
+        config = load_experiment_config(self.test_config_path)
+        self.assertEqual(config, self.test_config, "Configuration loading failed.")
 
-def test_argument_parsing():
-    """Test if the script handles argument parsing correctly."""
-    experiment_file, temp_dataset_dir, temp_experiment_dir = create_dummy_experiment_file()
-    try:
-        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../src/ev_run_experiment.py'))
-        result = os.system(f"python {script_path} {experiment_file} --num_parallel 4 --no_stream_redirection")
-        assert result == 0, "Script should execute without errors for valid input."
-    finally:
-        os.remove(experiment_file)
-        os.rmdir(temp_dataset_dir)
-        os.rmdir(temp_experiment_dir)
+    def test_prepare_experiment_params(self):
+        """Test preparing experiment parameters."""
+        config = load_experiment_config(self.test_config_path)
+        params = prepare_experiment_params(config)
 
-
-def test_run_experiment():
-    """Test the core run_experiment functionality."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        output_dir = os.path.join(temp_dir, "output")
-        model_dir = os.path.join(temp_dir, "model")
-        os.makedirs(model_dir, exist_ok=True)
-
-        result = run_experiment(
-            output_dir=output_dir,
-            model_dir=model_dir,
-            model_config='dummy_config',
-            pc_name='test_pc',
-            pcerror_path='/path/to/pcerror',
-            pcerror_cfg_path='/path/to/pcerror.cfg',
-            input_pc='/path/to/input.ply',
-            input_norm='/path/to/norm.ply',
-            opt_metrics=['d1'],
-            max_deltas=[1],
-            fixed_threshold=True,
-            no_stream_redirection=True
+        expected_output_dir = os.path.join(
+            config["EXPERIMENT_DIR"], "test_pc", "model1", "1.00e-04"
         )
-        assert result is not None, "run_experiment should return a valid process."
+        self.assertEqual(len(params), 2, "Incorrect number of experiment parameters prepared.")
+        self.assertEqual(params[0]["output_dir"], expected_output_dir, "Output directory mismatch.")
 
+    @patch("ev_run_experiment.Popen")
+    def test_run_experiment(self, mock_popen):
+        """Test running a single experiment."""
+        # Configure mock
+        mock_process = MagicMock()
+        mock_process.returncode = 0  # Simulate successful execution
+        mock_popen.return_value = mock_process
 
-def test_load_experiment_config():
-    """Test loading the YAML experiment configuration."""
-    experiment_file, temp_dataset_dir, temp_experiment_dir = create_dummy_experiment_file()
-    try:
-        with open(experiment_file, 'r') as f:
-            config = yaml.load(f, Loader=yaml.FullLoader)
-        assert 'MPEG_TMC13_DIR' in config, "Key MPEG_TMC13_DIR should exist in the configuration."
-        assert 'data' in config, "Key data should exist in the configuration."
-    finally:
-        os.remove(experiment_file)
-        os.rmdir(temp_dataset_dir)
-        os.rmdir(temp_experiment_dir)
+        config = load_experiment_config(self.test_config_path)
+        params = prepare_experiment_params(config)[0]
 
-if __name__ == '__main__':
-    pytest.main([__file__])
+        # Test successful execution
+        run_experiment(params, no_stream_redirection=True)
+        
+        # Verify Popen was called with correct arguments
+        mock_popen.assert_called_once()
+        args = mock_popen.call_args[0][0]  # Get the command arguments
+        self.assertTrue(any('--config=test_cfg' in arg for arg in args))
+        self.assertTrue(any('--modelPath=model1' in arg for arg in args))
+
+        # Test failed execution
+        mock_process.returncode = 1  # Simulate failed execution
+        with self.assertRaises(RuntimeError):
+            run_experiment(params, no_stream_redirection=True)
+
+if __name__ == "__main__":
+    unittest.main()

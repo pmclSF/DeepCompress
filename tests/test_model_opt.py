@@ -1,46 +1,38 @@
-import sys
-import os
-
-# Add the 'src' directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-
-import pytest
-import tensorflow as tf
+import unittest
 import numpy as np
-from model_opt import chamfer_distance, PointCloudAutoencoder, preprocess_point_cloud
+import tensorflow as tf
+from model_opt import ModelOptimizer
 
-# Test Chamfer Distance
-def test_chamfer_distance():
-    pc1 = tf.constant([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=tf.float32)
-    pc2 = tf.constant([[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]], dtype=tf.float32)
-    distance = chamfer_distance(pc1, pc2)
-    assert distance.numpy() > 0
+class TestModelOpt(unittest.TestCase):
 
-# Test autoencoder shape
-def test_autoencoder_shape():
-    autoencoder = PointCloudAutoencoder()
-    input_data = tf.random.normal([1, 64, 64, 64, 1])
-    output_data = autoencoder(input_data)
-    assert output_data.shape == input_data.shape
+    def setUp(self):
+        """Set up a simple model and synthetic dataset for testing."""
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
 
-# Test preprocessing function
-def test_preprocess_point_cloud():
-    # Placeholder test for preprocessing (requires a valid .ply file path)
-    # pc_data = preprocess_point_cloud("path/to/sample.ply", voxel_size=0.1)
-    # assert isinstance(pc_data, np.ndarray)
-    # assert pc_data.shape[1] == 3
-    pass
+        self.inputs = np.random.rand(100, 10).astype(np.float32)
+        self.targets = np.random.rand(100, 1).astype(np.float32)
+        self.loss_fn = tf.keras.losses.MeanSquaredError()
+        self.optimizer = ModelOptimizer(learning_rate=0.001)
 
-# Test training workflow
-def test_train_autoencoder():
-    dataset = tf.data.Dataset.from_tensor_slices(np.random.rand(10, 64, 64, 64, 1).astype(np.float32))
-    autoencoder = PointCloudAutoencoder()
-    try:
-        for batch in dataset.batch(2):
-            with tf.GradientTape() as tape:
-                reconstructed = autoencoder(batch, training=True)
-                loss = chamfer_distance(batch, reconstructed)
-            gradients = tape.gradient(loss, autoencoder.trainable_variables)
-            autoencoder.optimizer.apply_gradients(zip(gradients, autoencoder.trainable_variables))
-    except Exception as e:
-        assert False, f"Training failed with error: {e}"
+    def test_optimize_model(self):
+        """Test the optimize_model method for training."""
+        initial_weights = [layer.get_weights() for layer in self.model.layers]
+
+        trained_model, loss_history = self.optimizer.optimize_model(
+            self.model, self.inputs, self.targets, self.loss_fn, epochs=5, batch_size=10
+        )
+
+        self.assertEqual(len(loss_history), 5, "Loss history length does not match epochs.")
+        self.assertNotEqual(initial_weights, [layer.get_weights() for layer in trained_model.layers],
+                            "Model weights did not update after training.")
+
+    def test_evaluate_model(self):
+        """Test the evaluate_model method for loss computation."""
+        evaluation_loss = self.optimizer.evaluate_model(self.model, self.inputs, self.targets, self.loss_fn)
+        self.assertTrue(evaluation_loss >= 0, "Evaluation loss should be non-negative.")
+
+if __name__ == "__main__":
+    unittest.main()

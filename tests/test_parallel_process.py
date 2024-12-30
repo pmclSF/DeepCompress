@@ -1,42 +1,98 @@
-import sys
-import os
-
-# Add the 'src' directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-
-import pytest
-from parallel_process import parallel_process, Popen
+import unittest
+import time
 import subprocess
+from unittest.mock import patch, MagicMock
+from concurrent.futures import TimeoutError
+from parallel_process import (
+    parallel_process, 
+    Popen, 
+    ProcessTimeoutError,
+    ProcessResult
+)
 
-# Test parallel_process function
-def test_parallel_process():
-    def sample_function(x, y):
-        return x + y
+def square(x):
+    """Simple square function for testing."""
+    return x * x
 
-    params = [(1, 2), (3, 4), (5, 6)]
-    results = parallel_process(sample_function, params, num_parallel=2)
+def slow_function(x):
+    """Function that takes time to complete."""
+    time.sleep(x)
+    return x * x
 
-    # Assert results are as expected
-    assert results == [3, 7, 11]
+def failing_function(x):
+    """Function that fails on certain inputs."""
+    if x == 2:  # Fail on input 2
+        raise ValueError("Failing on purpose")
+    return x * x
 
-# Test Popen wrapper
-def test_popen():
-    command = ["echo", "Hello, World!"]
-    process = Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
+class TestParallelProcess(unittest.TestCase):
+    def test_parallel_process_basic(self):
+        """Test basic parallel execution with correct ordering."""
+        params = [1, 2, 3, 4, 5]
+        expected_results = [1, 4, 9, 16, 25]
 
-    # Assert the output is correct
-    assert process.returncode == 0
-    assert stdout.strip() == "Hello, World!"
-    assert stderr == ""
+        results = parallel_process(square, params, num_parallel=2)
+        self.assertEqual(results, expected_results)
 
-# Edge case: Empty params list
-def test_parallel_process_empty():
-    def sample_function(x, y):
-        return x + y
+    def test_parallel_process_timeout(self):
+        """Test timeout functionality."""
+        params = [0.1, 0.1, 2.0]  # Last task will timeout
+        
+        with self.assertRaises(TimeoutError):
+            parallel_process(slow_function, params, 
+                           num_parallel=2, timeout=1.0)
 
-    params = []
-    results = parallel_process(sample_function, params, num_parallel=2)
+    def test_parallel_process_retries(self):
+        """Test retry functionality for failing tasks."""
+        params = [1, 2, 3]  # 2 will fail
+        
+        with self.assertRaises(ValueError):
+            parallel_process(failing_function, params, 
+                           num_parallel=2, max_retries=2)
 
-    # Assert the results are empty
-    assert results == []
+    @patch("subprocess.Popen")
+    def test_popen_timeout(self, mock_popen):
+        """Test Popen subprocess timeout."""
+        mock_process = MagicMock()
+        mock_process.wait.side_effect = subprocess.TimeoutExpired(cmd=["test"], timeout=1.0)
+        mock_process.stdout = None
+        mock_process.stderr = None
+        mock_popen.return_value = mock_process
+
+        cmd = ["sleep", "10"]
+        with self.assertRaises(ProcessTimeoutError):
+            with Popen(cmd, timeout=1.0) as process:
+                process.wait()
+
+    @patch("subprocess.Popen")
+    def test_popen_cleanup(self, mock_popen):
+        """Test proper cleanup of Popen resources."""
+        mock_process = MagicMock()
+        mock_process.stdout = MagicMock()
+        mock_process.stderr = MagicMock()
+        mock_popen.return_value = mock_process
+
+        cmd = ["echo", "test"]
+        with Popen(cmd) as process:
+            pass  # Context manager should handle cleanup
+
+        mock_process.terminate.assert_called_once()
+        mock_process.stdout.close.assert_called_once()
+        mock_process.stderr.close.assert_called_once()
+
+    def test_process_result_dataclass(self):
+        """Test ProcessResult dataclass functionality."""
+        result = ProcessResult(
+            index=0,
+            result=42,
+            success=True,
+            error=None
+        )
+        
+        self.assertEqual(result.index, 0)
+        self.assertEqual(result.result, 42)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.error)
+
+if __name__ == "__main__":
+    unittest.main()
