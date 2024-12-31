@@ -1,9 +1,0 @@
-LICENSE
-README.md
-setup.py
-src/deepcompress.egg-info/PKG-INFO
-src/deepcompress.egg-info/SOURCES.txt
-src/deepcompress.egg-info/dependency_links.txt
-src/deepcompress.egg-info/requires.txt
-src/deepcompress.egg-info/top_level.txt
-src/utils/patch_gaussian_conditional.py
