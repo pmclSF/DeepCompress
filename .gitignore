@@ -1,31 +1,4 @@
-# Python-specific
-__pycache__/
-*.pyc
-*.pyo
-
-# Environment folders
+# Virtual environment
 env/
-.venv/
-
-# Ignore specific environment files
-env/lib/python3.8/site-packages/open3d/cpu/pybind.cpython-38-darwin.so
-env/lib/python3.8/site-packages/tensorflow/libtensorflow_cc.2.dylib
-
-# Jupyter notebooks
-.ipynb_checkpoints/
-
-# System-specific
-.DS_Store
-Thumbs.db
-.AppleDouble
-.LSOverride
-
-# Log files
-*.log
-
-# Ignore all shell scripts
-*.sh
-
-# Custom directories
-/env/
-/myutils/
+*.dylib
+*.so
