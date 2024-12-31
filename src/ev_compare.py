@@ -1,116 +1,179 @@
+import tensorflow as tf
 import os
 import argparse
-import numpy as np
-import tensorflow as tf
 import time
-import psutil
-from ds_mesh_to_pc import read_off  # Assuming this function is available
+import logging
+from typing import Dict, Tuple
+from pathlib import Path
+from dataclasses import dataclass
 
-def compute_psnr(original, compressed):
-    """
-    Compute the Peak Signal-to-Noise Ratio (PSNR) between original and compressed point clouds.
+@dataclass
+class EvaluationConfig:
+    """Configuration for evaluation metrics."""
+    max_distance: float = 1.0
+    num_points: int = 2048
+    use_normals: bool = True
 
-    Args:
-        original (np.ndarray): The original point cloud.
-        compressed (np.ndarray): The compressed point cloud.
+class PointCloudMetrics(tf.keras.metrics.Metric):
+    """Custom metric class for point cloud evaluation."""
+    
+    def __init__(self, name='point_cloud_metrics', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.psnr = self.add_weight(name='psnr', initializer='zeros')
+        self.chamfer = self.add_weight(name='chamfer', initializer='zeros')
+        self.count = self.add_weight(name='count', initializer='zeros')
 
-    Returns:
-        float: PSNR value.
-    """
-    mse = np.mean(np.square(original - compressed))
-    max_value = np.max(np.abs(original))  # Max value for normalization (can be adjusted)
-    psnr = 10 * np.log10((max_value**2) / mse)
-    return psnr
+    @tf.function
+    def compute_psnr(self, original: tf.Tensor, compressed: tf.Tensor) -> tf.Tensor:
+        """Compute Peak Signal-to-Noise Ratio."""
+        mse = tf.reduce_mean(tf.square(original - compressed))
+        max_val = tf.reduce_max(tf.abs(original))
+        return 10 * tf.math.log(max_val**2 / mse) / tf.math.log(10.0)
 
-def compute_bd_rate(original_psnr, compressed_psnr, original_bit_rate, compressed_bit_rate):
-    """
-    Compute the Bjøntegaard Delta Rate (BD-Rate) between original and compressed point clouds.
+    @tf.function
+    def compute_chamfer(self, 
+                       original: tf.Tensor,
+                       compressed: tf.Tensor) -> tf.Tensor:
+        """Compute Chamfer distance."""
+        # Compute pairwise distances
+        original_expanded = tf.expand_dims(original, 1)
+        compressed_expanded = tf.expand_dims(compressed, 0)
+        
+        distances = tf.reduce_sum(
+            tf.square(original_expanded - compressed_expanded),
+            axis=-1
+        )
+        
+        # Compute minimum distances in both directions
+        d1 = tf.reduce_min(distances, axis=1)
+        d2 = tf.reduce_min(distances, axis=0)
+        
+        return tf.reduce_mean(d1) + tf.reduce_mean(d2)
 
-    Args:
-        original_psnr (float): PSNR of the original point cloud.
-        compressed_psnr (float): PSNR of the compressed point cloud.
-        original_bit_rate (float): Bitrate of the original point cloud.
-        compressed_bit_rate (float): Bitrate of the compressed point cloud.
+    @tf.function
+    def update_state(self, original: tf.Tensor, compressed: tf.Tensor):
+        """Update metric states."""
+        psnr = self.compute_psnr(original, compressed)
+        chamfer = self.compute_chamfer(original, compressed)
+        
+        self.psnr.assign_add(psnr)
+        self.chamfer.assign_add(chamfer)
+        self.count.assign_add(1)
 
-    Returns:
-        float: BD-Rate value.
-    """
-    return (compressed_bit_rate - original_bit_rate) / original_bit_rate
+    def result(self) -> Dict[str, tf.Tensor]:
+        """Return computed metrics."""
+        return {
+            'psnr': self.psnr / self.count,
+            'chamfer': self.chamfer / self.count
+        }
 
-def compute_compression_ratio(original_size, compressed_size):
-    """
-    Compute the Compression Ratio between the original and compressed point clouds.
+    def reset_state(self):
+        """Reset metric states."""
+        self.psnr.assign(0)
+        self.chamfer.assign(0)
+        self.count.assign(0)
 
-    Args:
-        original_size (int): The size of the original file.
-        compressed_size (int): The size of the compressed file.
+class CompressionEvaluator:
+    """Evaluator for point cloud compression."""
+    
+    def __init__(self, config: EvaluationConfig):
+        self.config = config
+        self.metrics = PointCloudMetrics()
+        
+    @tf.function
+    def load_point_cloud(self, file_path: str) -> tf.Tensor:
+        """Load point cloud from file."""
+        raw_data = tf.io.read_file(file_path)
+        lines = tf.strings.split(raw_data, '\n')
+        
+        # Skip header
+        data_lines = lines[tf.where(
+            tf.strings.regex_full_match(lines, r'[\d\.\-\+eE\s]+')
+        )[:, 0]]
+        
+        # Parse points
+        points = tf.strings.to_number(
+            tf.strings.split(data_lines),
+            out_type=tf.float32
+        )
+        
+        return points[:, :3]  # Return only XYZ coordinates
 
-    Returns:
-        float: Compression ratio.
-    """
-    return original_size / compressed_size
-
-def measure_time(func):
-    """Measure the time taken for a function to execute."""
-    start_time = time.time()
-    func()
-    end_time = time.time()
-    return end_time - start_time
-
-def measure_memory(func):
-    """Measure the memory usage during the execution of a function."""
-    process = psutil.Process(os.getpid())
-    start_memory = process.memory_info().rss  # in bytes
-    func()
-    end_memory = process.memory_info().rss  # in bytes
-    return (end_memory - start_memory) / (1024 * 1024)  # in MB
-
-def evaluate_compression(original_file, compressed_file):
-    """
-    Evaluate the compression performance of point clouds by comparing original and compressed files.
-
-    Args:
-        original_file (str): Path to the original .ply file.
-        compressed_file (str): Path to the compressed .ply file.
-    """
-    # Read original and compressed point clouds
-    original_vertices, _ = read_off(original_file)
-    compressed_vertices, _ = read_off(compressed_file)
-
-    # Compute PSNR
-    psnr = compute_psnr(original_vertices, compressed_vertices)
-    print(f"PSNR: {psnr} dB")
-
-    # Compute Bitrate (file size based)
-    original_size = os.path.getsize(original_file) / 1024  # in KB
-    compressed_size = os.path.getsize(compressed_file) / 1024  # in KB
-    bitrate = compressed_size / original_size
-    print(f"Bitrate: {bitrate:.2f}")
-
-    # Compute Compression Ratio
-    compression_ratio = compute_compression_ratio(original_size, compressed_size)
-    print(f"Compression Ratio: {compression_ratio:.2f}")
-
-    # Measure time efficiency
-    compression_time = measure_time(lambda: read_off(compressed_file))
-    decompression_time = measure_time(lambda: read_off(original_file))
-    print(f"Compression Time: {compression_time:.2f} seconds")
-    print(f"Decompression Time: {decompression_time:.2f} seconds")
-
-    # Measure memory efficiency
-    compression_memory = measure_memory(lambda: read_off(compressed_file))
-    decompression_memory = measure_memory(lambda: read_off(original_file))
-    print(f"Compression Memory: {compression_memory:.2f} MB")
-    print(f"Decompression Memory: {decompression_memory:.2f} MB")
+    def evaluate_compression(self,
+                           original_path: str,
+                           compressed_path: str) -> Dict[str, float]:
+        """Evaluate compression quality."""
+        # Load point clouds
+        original = self.load_point_cloud(original_path)
+        compressed = self.load_point_cloud(compressed_path)
+        
+        # Update metrics
+        self.metrics.update_state(original, compressed)
+        
+        # Get results
+        results = self.metrics.result()
+        
+        # Add additional metrics
+        results['file_size_ratio'] = (
+            os.path.getsize(compressed_path) /
+            os.path.getsize(original_path)
+        )
+        
+        return {k: float(v) for k, v in results.items()}
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate compression of point cloud models.")
-    parser.add_argument("original_file", type=str, help="Path to the original .ply file.")
-    parser.add_argument("compressed_file", type=str, help="Path to the compressed .ply file.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate point cloud compression."
+    )
+    parser.add_argument(
+        "original_dir",
+        type=str,
+        help="Directory containing original point clouds"
+    )
+    parser.add_argument(
+        "compressed_dir",
+        type=str,
+        help="Directory containing compressed point clouds"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="evaluation_results.json",
+        help="Path to save evaluation results"
+    )
+    
     args = parser.parse_args()
-
-    # Run evaluation
-    evaluate_compression(args.original_file, args.compressed_file)
+    
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    # Initialize evaluator
+    evaluator = CompressionEvaluator(EvaluationConfig())
+    
+    # Find matching files
+    original_files = set(os.listdir(args.original_dir))
+    compressed_files = set(os.listdir(args.compressed_dir))
+    common_files = original_files & compressed_files
+    
+    results = {}
+    for filename in common_files:
+        logger.info(f"Evaluating {filename}")
+        
+        original_path = os.path.join(args.original_dir, filename)
+        compressed_path = os.path.join(args.compressed_dir, filename)
+        
+        results[filename] = evaluator.evaluate_compression(
+            original_path,
+            compressed_path
+        )
+    
+    # Save results
+    import json
+    with open(args.output, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    logger.info(f"Results saved to {args.output}")
 
 if __name__ == "__main__":
     main()

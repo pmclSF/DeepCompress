@@ -1,111 +1,236 @@
 import tensorflow as tf
-from tensorflow.keras.layers import Layer, Conv3D, Conv3DTranspose, AveragePooling3D, BatchNormalization, LayerNormalization
-from tensorflow.keras.models import Sequential
-from enum import Enum
-from typing import List, Tuple, Callable, Dict
-import logging
+from typing import List, Tuple, Optional, Dict, Any
+from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+@dataclass
+class TransformConfig:
+    """Configuration for network transforms."""
+    filters: int
+    kernel_size: Tuple[int, int, int] = (3, 3, 3)
+    strides: Tuple[int, int, int] = (1, 1, 1)
+    activation: str = 'cenic_gdn'
+    conv_type: str = 'separable'
 
-class SequentialLayer(Layer):
-    def __init__(self, layers, *args, **kwargs):
-        super(SequentialLayer, self).__init__(*args, **kwargs)
-        self._layers = layers
+class CENICGDN(tf.keras.layers.Layer):
+    """CENIC-GDN activation function implementation."""
+    
+    def __init__(self, channels: int, **kwargs):
+        super().__init__(**kwargs)
+        self.channels = channels
+        
+    def build(self, input_shape):
+        self.beta = self.add_weight(
+            name='beta',
+            shape=[self.channels],
+            initializer='ones',
+            trainable=True
+        )
+        self.gamma = self.add_weight(
+            name='gamma',
+            shape=[self.channels, self.channels],
+            initializer='zeros',
+            trainable=True
+        )
+        super().build(input_shape)
+        
+    @tf.function
+    def call(self, x):
+        norm = tf.abs(x)
+        norm = tf.tensordot(norm, self.gamma, [[3], [0]])
+        norm = tf.nn.bias_add(norm, self.beta)
+        return x / norm
 
-    def call(self, tensor, **kwargs):
-        for layer in self._layers:
-            tensor = layer(tensor)
-        return tensor
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'channels': self.channels
+        })
+        return config
 
-class ResidualLayer(Layer):
-    def __init__(self, layers, residual_mode='add', data_format=None, *args, **kwargs):
-        super(ResidualLayer, self).__init__(*args, **kwargs)
-        assert residual_mode in ('add', 'concat')
-        self._layers = layers
-        self.residual_mode = residual_mode
-        self.data_format = data_format
+class SpatialSeparableConv(tf.keras.layers.Layer):
+    """1+2D spatially separable convolution implementation."""
+    
+    def __init__(self, 
+                 filters: int, 
+                 kernel_size: Tuple[int, int, int] = (3, 3, 3),
+                 strides: Tuple[int, int, int] = (1, 1, 1),
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.strides = strides
+        
+        # 1D path
+        self.conv1d = tf.keras.layers.Conv3D(
+            filters=filters // 2,
+            kernel_size=(kernel_size[0], 1, 1),
+            strides=(strides[0], 1, 1),
+            padding='same'
+        )
+        
+        # 2D path
+        self.conv2d = tf.keras.layers.Conv3D(
+            filters=filters,
+            kernel_size=(1, kernel_size[1], kernel_size[2]),
+            strides=(1, strides[1], strides[2]),
+            padding='same'
+        )
 
-    def call(self, tensor, **kwargs):
-        tensor = self._layers[0](tensor)
-        residual = tensor
-        for layer in self._layers[1:]:
-            tensor = layer(tensor)
-        if self.residual_mode == 'add':
-            return residual + tensor
-        else:
-            return tf.concat([residual, tensor], axis=-1)
+    @tf.function    
+    def call(self, inputs):
+        x = self.conv1d(inputs)
+        return self.conv2d(x)
 
-class AnalysisTransform(SequentialLayer):
-    def __init__(self, filters, kernel_size=(3, 3, 3), strides=(1, 1, 1), activation=tf.nn.relu, *args, **kwargs):
-        layers = [
-            Conv3D(filters, kernel_size, strides=strides, padding='same', activation=activation),
-            Conv3D(filters, kernel_size, padding='same', activation=activation),
-            Conv3D(filters, kernel_size, padding='same', activation=None)
-        ]
-        super(AnalysisTransform, self).__init__(layers, *args, **kwargs)
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'filters': self.filters,
+            'kernel_size': self.kernel_size,
+            'strides': self.strides
+        })
+        return config
 
-class SynthesisTransform(SequentialLayer):
-    def __init__(self, filters, kernel_size=(3, 3, 3), strides=(1, 1, 1), activation=tf.nn.relu, *args, **kwargs):
-        layers = [
-            Conv3DTranspose(filters, kernel_size, strides=strides, padding='same', activation=activation),
-            Conv3DTranspose(filters, kernel_size, padding='same', activation=activation),
-            Conv3DTranspose(1, kernel_size, padding='same', activation=activation)
-        ]
-        super(SynthesisTransform, self).__init__(layers, *args, **kwargs)
+class AnalysisTransform(tf.keras.layers.Layer):
+    """Analysis transform with progressive channel expansion."""
+    
+    def __init__(self, config: TransformConfig, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        
+        # Define layers
+        self.conv_layers = []
+        current_filters = config.filters
+        
+        for i in range(3):  # Three blocks as per paper
+            if config.conv_type == 'separable':
+                conv = SpatialSeparableConv(
+                    filters=current_filters,
+                    kernel_size=config.kernel_size,
+                    strides=config.strides
+                )
+            else:
+                conv = tf.keras.layers.Conv3D(
+                    filters=current_filters,
+                    kernel_size=config.kernel_size,
+                    strides=config.strides,
+                    padding='same'
+                )
+            
+            self.conv_layers.append(conv)
+            
+            if config.activation == 'cenic_gdn':
+                self.conv_layers.append(CENICGDN(current_filters))
+            else:
+                self.conv_layers.append(tf.keras.layers.ReLU())
+                
+            current_filters *= 2  # Progressive channel expansion
 
-def custom_transform(filters: int, layer_specs: List[Tuple[str, Dict]], activation=tf.nn.relu):
-    layers = []
-    for layer_type, kwargs in layer_specs:
-        if layer_type == "conv":
-            layers.append(Conv3D(filters=filters, activation=activation, **kwargs))
-        elif layer_type == "pool":
-            layers.append(AveragePooling3D(**kwargs))
-    return SequentialLayer(layers)
+    @tf.function
+    def call(self, inputs):
+        x = inputs
+        for layer in self.conv_layers:
+            x = layer(x)
+        return x
 
-def latent_regularization(tensor: tf.Tensor) -> tf.Tensor:
-    return tf.reduce_mean(tf.square(tensor))
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'config': self.config
+        })
+        return config
 
-def profile_transform(transform: Layer, input_shape: Tuple[int, int, int, int]):
-    input_data = tf.random.uniform(input_shape)
-    with tf.profiler.experimental.Profile('transform_profile'):
-        _ = transform(input_data)
+class SynthesisTransform(tf.keras.layers.Layer):
+    """Synthesis transform with progressive channel reduction."""
+    
+    def __init__(self, config: TransformConfig, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        
+        # Define layers
+        self.conv_layers = []
+        current_filters = config.filters * 4  # Start with max channels
+        
+        for i in range(3):  # Three blocks as per paper
+            if config.conv_type == 'separable':
+                conv = SpatialSeparableConv(
+                    filters=current_filters,
+                    kernel_size=config.kernel_size,
+                    strides=config.strides
+                )
+            else:
+                conv = tf.keras.layers.Conv3DTranspose(
+                    filters=current_filters,
+                    kernel_size=config.kernel_size,
+                    strides=config.strides,
+                    padding='same'
+                )
+            
+            self.conv_layers.append(conv)
+            
+            if config.activation == 'cenic_gdn':
+                self.conv_layers.append(CENICGDN(current_filters))
+            else:
+                self.conv_layers.append(tf.keras.layers.ReLU())
+                
+            current_filters = max(current_filters // 2, config.filters)  # Progressive reduction
 
-def normalization_layer(norm_type="batch") -> Layer:
-    if norm_type == "batch":
-        return BatchNormalization()
-    elif norm_type == "instance":
-        return LayerNormalization()
+    @tf.function
+    def call(self, inputs):
+        x = inputs
+        for layer in self.conv_layers:
+            x = layer(x)
+        return x
 
-def experiment_with_activations(activations: List[Callable], transform_class: Callable, filters: int, input_shape: Tuple[int, int, int, int]):
-    results = {}
-    for activation in activations:
-        transform = transform_class(filters=filters, activation=activation)
-        input_data = tf.random.uniform(input_shape)
-        output = transform(input_data)
-        results[activation.__name__] = output.shape
-    return results
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'config': self.config
+        })
+        return config
 
-def process_voxelized_input(transform: Layer, voxel_grid: tf.Tensor) -> tf.Tensor:
-    """
-    Process a voxelized input for point cloud compression.
-    """
-    return transform(voxel_grid)
+class DeepCompressModel(tf.keras.Model):
+    """Complete DeepCompress model implementation."""
+    
+    def __init__(self, config: TransformConfig, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        
+        # Main transforms
+        self.analysis = AnalysisTransform(config)
+        self.synthesis = SynthesisTransform(config)
+        
+        # Hyperprior
+        self.hyper_analysis = AnalysisTransform(TransformConfig(
+            filters=config.filters // 2,
+            kernel_size=(1, 1, 1),
+            activation='relu'
+        ))
+        self.hyper_synthesis = SynthesisTransform(TransformConfig(
+            filters=config.filters // 2,
+            kernel_size=(1, 1, 1),
+            activation='relu'
+        ))
 
-def evaluate_transformation(predicted: tf.Tensor, target: tf.Tensor) -> Dict[str, float]:
-    from src.pc_metric import calculate_chamfer_distance, calculate_d1_metric
-    return {
-        "Chamfer Distance": calculate_chamfer_distance(predicted.numpy(), target.numpy()),
-        "D1 Metric": calculate_d1_metric(predicted.numpy(), target.numpy()),
-    }
+    @tf.function
+    def call(self, inputs):
+        # Analysis
+        y = self.analysis(inputs)
+        z = self.hyper_analysis(y)
+        
+        # Add uniform noise for training
+        if self.training:
+            y = y + tf.random.uniform(tf.shape(y), -0.5, 0.5)
+            z = z + tf.random.uniform(tf.shape(z), -0.5, 0.5)
+        
+        # Synthesis
+        y_hat = self.hyper_synthesis(z)
+        x_hat = self.synthesis(y)
+        
+        return x_hat, y, y_hat, z
 
-def advanced_activation(name="relu") -> Callable:
-    activations = {
-        "relu": tf.nn.relu,
-        "swish": tf.nn.swish,
-        "leaky_relu": tf.nn.leaky_relu
-    }
-    return activations.get(name, tf.nn.relu)
-
-class TransformType(Enum):
-    AnalysisTransform = AnalysisTransform
-    SynthesisTransform = SynthesisTransform
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'config': self.config
+        })
+        return config

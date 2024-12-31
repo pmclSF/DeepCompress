@@ -1,0 +1,2 @@
+[console_scripts]
+open3d = open3d.tools.cli:main
