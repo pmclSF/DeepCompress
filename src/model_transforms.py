@@ -1,25 +1,11 @@
+import tensorflow as tf
+from tensorflow.keras.layers import Layer, Conv3D, Conv3DTranspose, AveragePooling3D, BatchNormalization, LayerNormalization
+from tensorflow.keras.models import Sequential
 from enum import Enum
-# import tensorflow.compat.v1 as tf
-# from tensorflow.keras.layers import Layer, Conv3D, Conv3DTranspose, AveragePooling3D
-# from tensorflow_core.python.keras.utils import conv_utils
+from typing import List, Tuple, Callable, Dict
+import logging
 
-# import tensorflow_compression as tfc
-# import tensorflow.keras as keras
-
-def relu():
-    return keras.activations.relu
-def CGDN():
-    return tfc.GDN(alpha_parameter=1, epsilon_parameter=1)
-
-# ad-hoc alert: specify the activation using this:
-#ACTIVATION = relu
-# define a function similar to relu() to instantiate a GDN with alternative parameters
-ACTIVATION = tfc.GDN
-#ACTIVATION = CGDN
-
-def get_channel_axis(data_format):
-    return 1 if data_format == 'channels_first' else -1
-
+logger = logging.getLogger(__name__)
 
 class SequentialLayer(Layer):
     def __init__(self, layers, *args, **kwargs):
@@ -31,268 +17,95 @@ class SequentialLayer(Layer):
             tensor = layer(tensor)
         return tensor
 
-
 class ResidualLayer(Layer):
     def __init__(self, layers, residual_mode='add', data_format=None, *args, **kwargs):
         super(ResidualLayer, self).__init__(*args, **kwargs)
         assert residual_mode in ('add', 'concat')
         self._layers = layers
         self.residual_mode = residual_mode
-        self.data_format = conv_utils.normalize_data_format(data_format)
+        self.data_format = data_format
 
     def call(self, tensor, **kwargs):
         tensor = self._layers[0](tensor)
-        tensor1 = tensor
+        residual = tensor
         for layer in self._layers[1:]:
             tensor = layer(tensor)
         if self.residual_mode == 'add':
-            return tensor1 + tensor
+            return residual + tensor
         else:
-            return tf.concat((tensor, tensor1), get_channel_axis(self.data_format))
+            return tf.concat([residual, tensor], axis=-1)
 
+class AnalysisTransform(SequentialLayer):
+    def __init__(self, filters, kernel_size=(3, 3, 3), strides=(1, 1, 1), activation=tf.nn.relu, *args, **kwargs):
+        layers = [
+            Conv3D(filters, kernel_size, strides=strides, padding='same', activation=activation),
+            Conv3D(filters, kernel_size, padding='same', activation=activation),
+            Conv3D(filters, kernel_size, padding='same', activation=None)
+        ]
+        super(AnalysisTransform, self).__init__(layers, *args, **kwargs)
 
-class AnalysisTransformV1(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'strides': (2, 2, 2), 'padding': 'same', 'data_format': data_format, 'filters': filters}
-        layers = [Conv3D(kernel_size=(9, 9, 9), use_bias=True, activation=activation, **params),
-                  Conv3D(kernel_size=(5, 5, 5), use_bias=True, activation=activation, **params),
-                  Conv3D(kernel_size=(5, 5, 5), use_bias=False, activation=None, **params)]
-        super(AnalysisTransformV1, self).__init__(layers, *args, **kwargs)
+class SynthesisTransform(SequentialLayer):
+    def __init__(self, filters, kernel_size=(3, 3, 3), strides=(1, 1, 1), activation=tf.nn.relu, *args, **kwargs):
+        layers = [
+            Conv3DTranspose(filters, kernel_size, strides=strides, padding='same', activation=activation),
+            Conv3DTranspose(filters, kernel_size, padding='same', activation=activation),
+            Conv3DTranspose(1, kernel_size, padding='same', activation=activation)
+        ]
+        super(SynthesisTransform, self).__init__(layers, *args, **kwargs)
 
+def custom_transform(filters: int, layer_specs: List[Tuple[str, Dict]], activation=tf.nn.relu):
+    layers = []
+    for layer_type, kwargs in layer_specs:
+        if layer_type == "conv":
+            layers.append(Conv3D(filters=filters, activation=activation, **kwargs))
+        elif layer_type == "pool":
+            layers.append(AveragePooling3D(**kwargs))
+    return SequentialLayer(layers)
 
-class SynthesisTransformV1(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'strides': (2, 2, 2), 'padding': 'same', 'data_format': data_format, 'use_bias': True,
-                  'activation': activation}
-        layers = [Conv3DTranspose(filters, (5, 5, 5), **params),
-                  Conv3DTranspose(filters, (5, 5, 5), **params),
-                  Conv3DTranspose(1, (9, 9, 9), **params)]
-        super(SynthesisTransformV1, self).__init__(layers, *args, **kwargs)
+def latent_regularization(tensor: tf.Tensor) -> tf.Tensor:
+    return tf.reduce_mean(tf.square(tensor))
 
+def profile_transform(transform: Layer, input_shape: Tuple[int, int, int, int]):
+    input_data = tf.random.uniform(input_shape)
+    with tf.profiler.experimental.Profile('transform_profile'):
+        _ = transform(input_data)
 
-class AnalysisBlock(ResidualLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), strides=(2, 2, 2), activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format,
-                  'filters': filters, 'kernel_size': kernel_size, 'use_bias': True}
-        layers = [Conv3D(strides=strides, activation=activation() **params),
-                  Conv3D(activation=activation(), **params),
-                  Conv3D(activation=activation(), **params)]
-        super(AnalysisBlock, self).__init__(layers, *args, data_format=data_format, **kwargs)
+def normalization_layer(norm_type="batch") -> Layer:
+    if norm_type == "batch":
+        return BatchNormalization()
+    elif norm_type == "instance":
+        return LayerNormalization()
 
+def experiment_with_activations(activations: List[Callable], transform_class: Callable, filters: int, input_shape: Tuple[int, int, int, int]):
+    results = {}
+    for activation in activations:
+        transform = transform_class(filters=filters, activation=activation)
+        input_data = tf.random.uniform(input_shape)
+        output = transform(input_data)
+        results[activation.__name__] = output.shape
+    return results
 
-class SynthesisBlock(ResidualLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), strides=(2, 2, 2), activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format, 'use_bias': True, 'activation': activation,
-                  'filters': filters, 'kernel_size': kernel_size}
-        layers = [Conv3DTranspose(strides=strides, **params),
-                  Conv3DTranspose(**params),
-                  Conv3DTranspose(**params)]
-        super(SynthesisBlock, self).__init__(layers, *args, data_format=data_format, **kwargs)
+def process_voxelized_input(transform: Layer, voxel_grid: tf.Tensor) -> tf.Tensor:
+    """
+    Process a voxelized input for point cloud compression.
+    """
+    return transform(voxel_grid)
 
-class AnalysisBlockV3(ResidualLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), strides=(2, 2, 2), activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format,
-                  'filters': filters, 'kernel_size': kernel_size, 'use_bias': True}
-        layers = [Conv3D(strides=strides, activation=activation() **params),
-                  AnalysisBlockV3Base(filters=filters, data_format=data_format),
-                  AnalysisBlockV3Base(filters=filters, data_format=data_format)]
-        super(AnalysisBlockV3, self).__init__(layers, *args, data_format=data_format, **kwargs)
+def evaluate_transformation(predicted: tf.Tensor, target: tf.Tensor) -> Dict[str, float]:
+    from src.pc_metric import calculate_chamfer_distance, calculate_d1_metric
+    return {
+        "Chamfer Distance": calculate_chamfer_distance(predicted.numpy(), target.numpy()),
+        "D1 Metric": calculate_d1_metric(predicted.numpy(), target.numpy()),
+    }
 
-class AnalysisBlockV3Base(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=ACTIVATION, *args, **kwargs):
-        self.data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format, 'use_bias': True}
-        self.paths = [[Conv3D(kernel_size=(1,1,1), activation=activation(), filters=filters // 4, **params)],
-                      [Conv3D(kernel_size=(1,1,1), activation=activation(), filters=filters // 2, **params),
-                       [Conv3D(kernel_size=(1,1,3), activation=activation(), filters=filters // 4, **params), Conv3D(kernel_size=(3,3,1), activation=activation(), filters=filters // 4, **params),
-                        Conv3D(kernel_size=(3,1,1), activation=activation(), filters=filters // 4, **params), Conv3D(kernel_size=(1,3,3), activation=activation(), filters=filters // 4, **params),
-                        Conv3D(kernel_size=(1,3,1), activation=activation(), filters=filters // 4, **params), Conv3D(kernel_size=(3,1,3), activation=activation(), filters=filters // 4, **params)]]]
-        super(AnalysisBlockV3Base, self).__init__(Self.paths, *args, **kwargs)
-    
-    def call(self, tensor, **kwargs):
-        path_outs = [tensor, tensor]
-
-        for p in self.paths[0]:
-            path_outs[0] = p(path_outs[0])
-        
-        path_outs[1] = self.paths[1][0](path_outs[1])
-        sub_outs = [path_outs[1], path_outs[1], path_outs[1]]
-
-        sub_outs[0] = self.paths[1][1][0](sub_outs[0])
-        sub_outs[0] = self.paths[1][1][1](sub_outs[0])
-
-        sub_outs[1] = self.paths[1][1][2](sub_outs[1])
-        sub_outs[1] = self.paths[1][1][3](sub_outs[1])
-
-        sub_outs[2] = self.paths[1][1][4](sub_outs[2])
-        sub_outs[2] = self.paths[1][1][5](sub_outs[2])
-
-        return tf.concat((path_outs[0], sub_outs[0], sub_outs[1], sub_outs[2]), get_channel_axis(self.data_format))
-
-class ResidualLayerV2(Layer):
-    def __init__(self, layers, residual_mode='add', data_format=None, *args, **kwargs):
-        super(ResidualLayerV2, self).__init__(*args, **kwargs)
-        assert residual_mode in ('add', 'concat')
-        self._layers = layers
-        self.residual_mode = residual_mode
-        self.data_format = conv_utils.normalize_data_format(data_format)
-
-    def call(self, tensor, **kwargs):
-        tensor = self._layers[0](tensor)
-        tensor1 = tensor
-        layer = self._layers[1]
-        tensor = layer(tensor)
-        tensor2 = tensor
-        layer = self._layers[2]
-        tensor = layer(tensor + tensor1)
-        return tensor1 + tensor2 + tensor
-
-class AnalysisBlockV4(ResidualLayerV2):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), strides=(2, 2, 2), activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format,
-                  'filters': filters, 'kernel_size': kernel_size, 'use_bias': True}
-        layers = [Conv3D(strides=strides, activation=activation() **params),
-                  AnalysisBlockV3Base(filters=filters, data_format=data_format),
-                  AnalysisBlockV3Base(filters=filters, data_format=data_format)]
-        super(AnalysisBlockV4, self).__init__(layers, *args, data_format=data_format, **kwargs)
-
-class AnalysisTransformV2(SequentialLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), activation=tf.nn.relu, residual_mode='add',
-                 *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'kernel_size': kernel_size, 'activation': activation, 'data_format': data_format,
-                  'residual_mode': residual_mode}
-        layers = [AnalysisBlock(filters // 2, **params),
-                  AnalysisBlock(filters, **params),
-                  AnalysisBlock(filters, **params),
-                  Conv3D(filters, kernel_size, padding="same", use_bias=False, activation=None,
-                         data_format=data_format)]
-        super(AnalysisTransformV2, self).__init__(layers, *args, **kwargs)
-
-
-class SynthesisTransformV2(SequentialLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), activation=tf.nn.relu, residual_mode='add',
-                 *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'kernel_size': kernel_size, 'activation': activation, 'data_format': data_format,
-                  'residual_mode': residual_mode}
-        layers = [SynthesisBlock(filters, **params),
-                  SynthesisBlock(filters, **params),
-                  SynthesisBlock(filters // 2, **params),
-                  Conv3DTranspose(1, kernel_size, padding="same", use_bias=True, activation=activation,
-                                  data_format=data_format)]
-        super(SynthesisTransformV2, self).__init__(layers, *args, **kwargs)
-
-
-class AnalysisTransformProgressiveV2(SequentialLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), activation=ACTIVATION, residual_mode='add',
-                 *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'kernel_size': kernel_size, 'activation': activation, 'data_format': data_format,
-                  'residual_mode': residual_mode}
-        layers = [AnalysisBlock(filters // 4, **params),
-                  AnalysisBlock(filters // 2, **params),
-                  AnalysisBlock(filters, **params),
-                  Conv3D(filters, kernel_size, padding="same", use_bias=False, activation=None,
-                         data_format=data_format)]
-        super(AnalysisTransformProgressiveV2, self).__init__(layers, *args, **kwargs)
-
-
-class SynthesisTransformProgressiveV2(SequentialLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), activation=tf.nn.relu, residual_mode='add',
-                 *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'kernel_size': kernel_size, 'activation': activation, 'data_format': data_format,
-                  'residual_mode': residual_mode}
-        layers = [SynthesisBlock(filters, **params),
-                  SynthesisBlock(filters // 2, **params),
-                  SynthesisBlock(filters // 4, **params),
-                  Conv3DTranspose(1, kernel_size, padding="same", use_bias=True, activation=activation,
-                                  data_format=data_format)]
-        super(SynthesisTransformProgressiveV2, self).__init__(layers, *args, **kwargs)
-
-
-class AnalysisTransformProgressiveV3(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=ACTIVATION, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'activation': activation, 'data_format': data_format}
-        layers = [AnalysisBlock(filters // 4, **params),
-                  AnalysisBlock(filters // 2, **params),
-                  AnalysisBlockV3(filters, **params),
-                  Conv3D(filters, (3, 3, 3), padding="same", use_bias=False, activation=None,
-                         data_format=data_format)]
-        super(AnalysisTransformProgressiveV3, self).__init__(layers, *args, **kwargs)
-
-class AnalysisTransformProgressiveV4(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=ACTIVATION, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'activation': activation, 'data_format': data_format}
-        layers = [AnalysisBlockV4(filters // 4, **params),
-                  AnalysisBlockV4(filters // 2, **params),
-                  AnalysisBlockV4(filters, **params),
-                  Conv3D(filters, (3, 3, 3), padding="same", use_bias=False, activation=None,
-                         data_format=data_format)]
-        super(AnalysisTransformProgressiveV4, self).__init__(layers, *args, **kwargs)
-
-class AnalysisTransformProgressiveV5(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=ACTIVATION, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'activation': activation, 'data_format': data_format}
-        layers = [AnalysisBlock(filters // 4, **params),
-                  AnalysisBlock(filters // 2, **params),
-                  AnalysisBlockV4(filters, **params),
-                  Conv3D(filters, (3, 3, 3), padding="same", use_bias=False, activation=None,
-                         data_format=data_format)]
-        super(AnalysisTransformProgressiveV5, self).__init__(layers, *args, **kwargs)
-
-class AnalysisTransformProgressiveV6(SequentialLayer):
-    def __init__(self, filters, data_format=None, activation=ACTIVATION, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'activation': activation, 'data_format': data_format}
-        layers = [AnalysisBlock(filters // 4, **params),
-                  AnalysisBlockV4(filters // 2, **params),
-                  AnalysisBlockV4(filters, **params),
-                  Conv3D(filters, (3, 3, 3), padding="same", use_bias=False, activation=None,
-                         data_format=data_format)]
-        super(AnalysisTransformProgressiveV6, self).__init__(layers, *args, **kwargs)
-
-class HyperAnalysisTransform(SequentialLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format, 'filters': filters, 'kernel_size': kernel_size}
-        layers = [Conv3D(use_bias=True, activation=activation, **params),
-                  Conv3D(use_bias=True, activation=activation, strides=(2, 2, 2), **params),
-                  Conv3D(use_bias=False, activation=None, **params)]
-        super(HyperAnalysisTransform, self).__init__(layers, *args, **kwargs)
-
-
-class HyperSynthesisTransform(SequentialLayer):
-    def __init__(self, filters, data_format=None, kernel_size=(3, 3, 3), activation=tf.nn.relu, *args, **kwargs):
-        data_format = conv_utils.normalize_data_format(data_format)
-        params = {'padding': 'same', 'data_format': data_format, 'activation': activation, 'use_bias': True,
-                  'filters': filters, 'kernel_size': kernel_size}
-        layers = [Conv3DTranspose(**params),
-                  Conv3DTranspose(strides=(2, 2, 2), **params),
-                  Conv3DTranspose(**params)]
-        super(HyperSynthesisTransform, self).__init__(layers, *args, **kwargs)
-
+def advanced_activation(name="relu") -> Callable:
+    activations = {
+        "relu": tf.nn.relu,
+        "swish": tf.nn.swish,
+        "leaky_relu": tf.nn.leaky_relu
+    }
+    return activations.get(name, tf.nn.relu)
 
 class TransformType(Enum):
-    AnalysisTransformV1 = AnalysisTransformV1
-    AnalysisTransformV2 = AnalysisTransformV2
-    AnalysisTransformProgressiveV2 = AnalysisTransformProgressiveV2
-    AnalysisTransformProgressiveV3 = AnalysisTransformProgressiveV3
-    AnalysisTransformProgressiveV4 = AnalysisTransformProgressiveV4
-    AnalysisTransformProgressiveV5 = AnalysisTransformProgressiveV5
-    AnalysisTransformProgressiveV6 = AnalysisTransformProgressiveV6
-    SynthesisTransformV1 = SynthesisTransformV1
-    SynthesisTransformV2 = SynthesisTransformV2
-    SynthesisTransformProgressiveV2 = SynthesisTransformProgressiveV2
-    HyperAnalysisTransform = HyperAnalysisTransform
-    HyperSynthesisTransform = HyperSynthesisTransform
+    AnalysisTransform = AnalysisTransform
+    SynthesisTransform = SynthesisTransform
