@@ -1,94 +1,126 @@
-import argparse
-import logging
 import os
-
 import yaml
+from subprocess import Popen, PIPE
+from typing import Dict, List, Any
+import logging
 
-from utils.experiment import assert_exists
-from utils.parallel_process import parallel_process, Popen
-from utils.pc_metric import validate_opt_metrics
+def load_experiment_config(config_path: str) -> Dict[str, Any]:
+    """
+    Load experiment configuration from a YAML file.
+    
+    Args:
+        config_path (str): Path to the YAML configuration file
+        
+    Returns:
+        Dict[str, Any]: Loaded configuration dictionary
+    """
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Validate required paths
+    required_dirs = ['MPEG_TMC13_DIR', 'PCERROR', 'MPEG_DATASET_DIR', 'EXPERIMENT_DIR']
+    for dir_key in required_dirs:
+        if dir_key not in config:
+            raise ValueError(f"Missing required configuration key: {dir_key}")
+    
+    return config
 
-os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+def prepare_experiment_params(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Prepare parameters for each experiment configuration.
+    
+    Args:
+        config (Dict[str, Any]): Loaded configuration dictionary
+        
+    Returns:
+        List[Dict[str, Any]]: List of parameter dictionaries for each experiment
+    """
+    experiment_params = []
+    
+    for model_config in config['model_configs']:
+        model_id = model_config['id']
+        
+        for lambda_val in model_config['lambdas']:
+            for data_config in config['data']:
+                params = {
+                    'model_id': model_id,
+                    'lambda_val': lambda_val,
+                    'pc_name': data_config['pc_name'],
+                    'cfg_name': data_config['cfg_name'],
+                    'input_pc': data_config['input_pc'],
+                    'input_norm': data_config['input_norm'],
+                    'output_dir': os.path.join(
+                        config['EXPERIMENT_DIR'],
+                        data_config['pc_name'],
+                        model_id,
+                        f"{lambda_val:.2e}"
+                    )
+                }
+                
+                # Add all configuration paths
+                params.update({
+                    'mpeg_dir': config['MPEG_TMC13_DIR'],
+                    'pcerror': config['PCERROR'],
+                    'dataset_dir': config['MPEG_DATASET_DIR']
+                })
+                
+                experiment_params.append(params)
+    
+    return experiment_params
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-    datefmt="%Y-%m-%d %H:%M:%S")
-logger = logging.getLogger(__name__)
-
-
-def run_experiment(output_dir, model_dir, model_config, pc_name, pcerror_path, pcerror_cfg_path, input_pc, input_norm,
-                   opt_metrics, max_deltas, fixed_threshold, no_stream_redirection=False):
-    os.makedirs(output_dir, exist_ok=True)
-    additional_params = []
-    if fixed_threshold:
-        additional_params += ['--fixed_threshold']
+def run_experiment(params: Dict[str, Any], no_stream_redirection: bool = False):
+    """
+    Run a single experiment with the given parameters.
+    
+    Args:
+        params (Dict[str, Any]): Parameters for the experiment
+        no_stream_redirection (bool): If True, don't redirect stdout/stderr
+    """
+    os.makedirs(params['output_dir'], exist_ok=True)
+    
+    # Construct command for experiment
+    cmd = [
+        os.path.join(params['mpeg_dir'], 'build', 'tmc3'),
+        '--config={}'.format(params['cfg_name']),
+        '--uncompressedDataPath={}'.format(
+            os.path.join(params['dataset_dir'], params['input_pc'])
+        ),
+        '--reconstructedDataPath={}'.format(
+            os.path.join(params['output_dir'], 'rec.ply')
+        ),
+        '--modelPath={}'.format(params['model_id']),
+        '--lambda={}'.format(params['lambda_val'])
+    ]
+    
+    # Run the experiment
     if no_stream_redirection:
-        f = None
-        additional_params += ['--no_stream_redirection']
+        process = Popen(cmd)
     else:
-        f = open(os.path.join(output_dir, 'experiment.log'), 'w')
-    return Popen(['python', 'ev_experiment.py',
-                  '--output_dir', output_dir,
-                  '--model_dir', model_dir,
-                  '--model_config', model_config,
-                  '--opt_metrics', *opt_metrics,
-                  '--max_deltas', *map(str, max_deltas),
-                  '--pc_name', pc_name,
-                  '--pcerror_path', pcerror_path,
-                  '--pcerror_cfg_path', pcerror_cfg_path,
-                  '--input_pc', input_pc,
-                  '--input_norm', input_norm] + additional_params, stdout=f, stderr=f)
+        log_file = os.path.join(params['output_dir'], 'log.txt')
+        with open(log_file, 'w') as f:
+            process = Popen(cmd, stdout=f, stderr=f)
+    
+    process.wait()
+    
+    if process.returncode != 0:
+        raise RuntimeError(f"Experiment failed with return code {process.returncode}")
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='ev_run_experiment.py', description='Run experiments.',
-                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('experiment_path', help='Experiments file path.')
-    parser.add_argument('--num_parallel', help='Number of parallel jobs. Adjust according to GPU memory.', default=16, type=int)
-    parser.add_argument('--no_stream_redirection', help='Disable stdout and stderr redirection.', default=False, action='store_true')
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run compression experiments")
+    parser.add_argument("config", help="Path to experiment configuration YAML")
+    parser.add_argument("--no-redirect", action="store_true", 
+                       help="Don't redirect stdout/stderr to log files")
+    
     args = parser.parse_args()
-    with open(args.experiment_path, 'r') as f:
-        experiments = yaml.load(f.read(), Loader=yaml.FullLoader)
-    keys = ['MPEG_TMC13_DIR', 'PCERROR', 'MPEG_DATASET_DIR', 'EXPERIMENT_DIR', 'pcerror_mpeg_mode',
-            'model_configs', 'opt_metrics', 'max_deltas', 'fixed_threshold']
-    MPEG_TMC13_DIR, PCERROR, MPEG_DATASET_DIR, EXPERIMENT_DIR, pcerror_mpeg_mode, model_configs, opt_metrics,\
-        max_deltas, fixed_threshold = [experiments[x] for x in keys]
-
-    #assert_exists(PCERROR)
-    assert_exists(MPEG_DATASET_DIR)
-    assert_exists(EXPERIMENT_DIR)
-    validate_opt_metrics(opt_metrics, with_normals=True)
-
-    logger.info('Starting our method\'s experiments')
-    params = []
-    for experiment in experiments['data']:
-        pc_name, cfg_name, input_pc, input_norm = \
-            [experiment[x] for x in ['pc_name', 'cfg_name', 'input_pc', 'input_norm']]
-        opt_output_dir = os.path.join(EXPERIMENT_DIR, pc_name)
-        for model_config in model_configs:
-            model_id = model_config['id']
-            config = model_config['config']
-            lambdas = model_config['lambdas']
-            cur_opt_metrics = model_config.get('opt_metrics', opt_metrics)
-            cur_max_deltas = model_config.get('max_deltas', max_deltas)
-            cur_fixed_threshold = model_config.get('fixed_threshold', fixed_threshold)
-            for lmbda in lambdas:
-                lmbda_str = f'{lmbda:.2e}'
-                checkpoint_id = model_config.get('checkpoint_id', model_id)
-                model_dir = os.path.join(EXPERIMENT_DIR, 'models', checkpoint_id, lmbda_str)
-                current_output_dir = os.path.join(opt_output_dir, model_id, lmbda_str)
-
-                pcerror_cfg_path = f'{MPEG_TMC13_DIR}/cfg/{pcerror_mpeg_mode}/{cfg_name}/r06/pcerror.cfg'
-                input_pc_full = os.path.join(MPEG_DATASET_DIR, input_pc)
-                input_norm_full = os.path.join(MPEG_DATASET_DIR, input_norm)
-                if not os.path.exists(os.path.join(model_dir, 'done')):
-                    logger.warning(f'Model training is not finished: skipping {model_dir} for {pc_name}')
-                else:
-                    opt_groups = ['d1', 'd2']
-                    if not all(os.path.exists(os.path.join(current_output_dir, f'report_{g}.json')) for g in opt_groups):
-                        params.append((current_output_dir, model_dir, config, pc_name, PCERROR, pcerror_cfg_path,
-                                       input_pc_full, input_norm_full, cur_opt_metrics, cur_max_deltas,
-                                       cur_fixed_threshold, args.no_stream_redirection))
-    parallel_process(run_experiment, params, args.num_parallel)
-    logger.info('Done')
+    
+    # Load configuration
+    config = load_experiment_config(args.config)
+    
+    # Prepare experiment parameters
+    experiment_params = prepare_experiment_params(config)
+    
+    # Run experiments
+    for params in experiment_params:
+        run_experiment(params, no_stream_redirection=args.no_redirect)

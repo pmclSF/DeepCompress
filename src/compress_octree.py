@@ -1,186 +1,183 @@
-import json
-import logging
-import cProfile
-from model_syntax import save_compressed_file
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-    datefmt="%Y-%m-%d %H:%M:%S")
-logger = logging.getLogger(__name__)
-
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import numpy as np
-import tensorflow.compat.v1 as tf
-import argparse
-import gzip
-from tqdm import trange
-from model_configs import ModelConfigType
-from utils import pc_io
-from utils.octree_coding import partition_octree
-from utils.pc_metric import avail_opt_metrics, validate_opt_metrics
-from pyntcloud import PyntCloud
+import os
+import logging
+from typing import Tuple, Dict, Any, Optional, List
+from pathlib import Path
+from scipy.spatial import cKDTree
 
+class OctreeCompressor:
+    def __init__(self, resolution: int = 64, debug_output: bool = False, output_dir: Optional[str] = None):
+        self.resolution = resolution
+        self.debug_output = debug_output
+        self.output_dir = output_dir
+        if debug_output and output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
-np.random.seed(42)
-tf.set_random_seed(42)
+    def _create_voxel_grid(self, point_cloud: np.ndarray, normals: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Convert point cloud to voxel grid with enhanced metadata."""
+        grid = np.zeros((self.resolution,) * 3, dtype=bool)
+        
+        # Calculate bounds with epsilon to avoid division by zero
+        min_bounds = np.min(point_cloud, axis=0)
+        max_bounds = np.max(point_cloud, axis=0)
+        ranges = max_bounds - min_bounds
+        ranges = np.where(ranges == 0, 1e-6, ranges)
+        
+        # Scale points to grid resolution
+        scaled_points = (point_cloud - min_bounds) / ranges * (self.resolution - 1)
+        indices = np.clip(scaled_points, 0, self.resolution - 1).astype(int)
+        
+        # Mark occupied voxels
+        for idx in indices:
+            grid[tuple(idx)] = True
+            
+        metadata = {
+            'min_bounds': min_bounds,
+            'max_bounds': max_bounds,
+            'ranges': ranges,
+            'has_normals': normals is not None
+        }
+        
+        if normals is not None:
+            metadata['normal_grid'] = self._create_normal_grid(indices, normals)
+            
+        if self.debug_output and self.output_dir:
+            debug_data = {
+                'grid': grid,
+                'metadata': metadata,
+                'scaled_points': scaled_points
+            }
+            self._save_debug_info('grid_creation', debug_data)
+            
+        return grid, metadata
 
+    def _create_normal_grid(self, indices: np.ndarray, normals: np.ndarray) -> np.ndarray:
+        """Create grid storing average normals for occupied voxels."""
+        normal_grid = np.zeros((self.resolution, self.resolution, self.resolution, 3))
+        normal_counts = np.zeros((self.resolution, self.resolution, self.resolution))
+        
+        # Accumulate normals in each voxel
+        for idx, normal in zip(indices, normals):
+            normal_grid[tuple(idx)] += normal
+            normal_counts[tuple(idx)] += 1
+        
+        # Average normals where counts > 0 with handling for zero counts
+        counts_expanded = np.expand_dims(normal_counts, -1)
+        counts_expanded = np.where(counts_expanded == 0, 1, counts_expanded)  # Avoid division by zero
+        normal_grid = normal_grid / counts_expanded
+        
+        # Normalize non-zero vectors
+        norms = np.linalg.norm(normal_grid, axis=-1, keepdims=True)
+        norms = np.where(norms == 0, 1, norms)  # Avoid division by zero
+        normal_grid = normal_grid / norms
+        
+        return normal_grid
 
-def write_pcs(pcs, folder):
-    os.makedirs(folder, exist_ok=True)
-    for j, points in enumerate(pcs):
-        pc_io.write_df(os.path.join(folder, f'{j}.ply'), pc_io.pa_to_df(points))
+    def compress(self, point_cloud: np.ndarray, normals: Optional[np.ndarray] = None, validate: bool = True) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Compress point cloud with optional normals and validation."""
+        if len(point_cloud) == 0:
+            raise ValueError("Empty point cloud provided")
+            
+        if normals is not None and normals.shape != point_cloud.shape:
+            raise ValueError("Normals shape must match point cloud shape")
+            
+        grid, metadata = self._create_voxel_grid(point_cloud, normals)
+        
+        if validate:
+            decompressed, _ = self.decompress(grid, metadata)
+            error = self._compute_error(decompressed, point_cloud)
+            metadata['compression_error'] = float(error)
+            logging.info(f"Compression error: {error:.6f}")
+            
+        return grid, metadata
 
+    def decompress(self, grid: np.ndarray, metadata: Dict[str, Any], *, return_normals: bool = True) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Decompress grid back to point cloud with optional normals.
+        
+        Args:
+            grid: Compressed binary grid
+            metadata: Compression metadata
+            return_normals: Whether to return normals if available
+            
+        Returns:
+            Tuple of points array and optional normals array
+        """
+        indices = np.argwhere(grid).astype(np.float32)
+        
+        # Scale points back to original space
+        points = indices / (self.resolution - 1) * metadata['ranges'] + metadata['min_bounds']
+        
+        # Handle normals if present and requested
+        normals = None
+        if return_normals and metadata.get('has_normals') and 'normal_grid' in metadata:
+            normals = metadata['normal_grid'][tuple(indices.astype(int).T)]
+            
+        return points, normals
 
-def compress():
-    assert args.resolution > 0, 'resolution must be positive'
-    assert args.data_format in ['channels_first', 'channels_last']
-    with_normals = args.input_normals is not None
-    validate_opt_metrics(args.opt_metrics, with_normals=with_normals)
+    def partition_octree(self, point_cloud: np.ndarray, max_points_per_block: int = 1000, min_block_size: float = 0.1) -> List[Tuple[np.ndarray, Dict[str, Any]]]:
+        """Partition point cloud into octree blocks."""
+        blocks = []
+        min_bounds = np.min(point_cloud, axis=0)
+        max_bounds = np.max(point_cloud, axis=0)
+        
+        def partition_recursive(points: np.ndarray, bounds: Tuple[np.ndarray, np.ndarray]) -> None:
+            if len(points) <= max_points_per_block or np.min(bounds[1] - bounds[0]) <= min_block_size:
+                if len(points) > 0:  # Only add non-empty blocks
+                    blocks.append((points, {'bounds': bounds}))
+                return
+                
+            mid = (bounds[0] + bounds[1]) / 2
+            for octant in np.ndindex((2, 2, 2)):
+                # Compute octant bounds
+                min_corner = np.array([
+                    bounds[0][i] if octant[i] == 0 else mid[i] for i in range(3)
+                ])
+                max_corner = np.array([
+                    mid[i] if octant[i] == 0 else bounds[1][i] for i in range(3)
+                ])
+                
+                # Find points in this octant with epsilon for stability
+                epsilon = 1e-10
+                mask = np.all(
+                    (points >= min_corner - epsilon) & 
+                    (points <= max_corner + epsilon),
+                    axis=1
+                )
+                if np.any(mask):
+                    partition_recursive(points[mask], (min_corner, max_corner))
+        
+        partition_recursive(point_cloud, (min_bounds, max_bounds))
+        return blocks
 
-    files_mult = 1
-    if with_normals:
-        files_mult *= 2
-        assert files_mult * len(args.input_files) == len(args.output_files)
-        assert files_mult * len(args.input_normals) == len(args.output_files)
-    else:
-        assert files_mult * len(args.input_files) == len(args.output_files)
-    decode_files = args.dec_files is not None
-    if decode_files:
-        assert files_mult * len(args.input_files) == len(args.dec_files)
+    def _compute_error(self, points1: np.ndarray, points2: np.ndarray) -> float:
+        """Compute average distance between point sets."""
+        tree = cKDTree(points2)
+        distances, _ = tree.query(points1)
+        return float(np.mean(distances))
 
-    assert args.model_config in ModelConfigType.keys()
+    def _save_debug_info(self, stage: str, data: Dict[str, Any]) -> None:
+        """Save debug information to files."""
+        if not self.debug_output or not self.output_dir:
+            return
+            
+        debug_dir = os.path.join(self.output_dir, 'debug', stage)
+        os.makedirs(debug_dir, exist_ok=True)
+        
+        for name, array in data.items():
+            if isinstance(array, (np.ndarray, dict)):
+                np.save(os.path.join(debug_dir, f"{name}.npy"), array)
 
-    p_min, p_max, dense_tensor_shape = pc_io.get_shape_data(args.resolution, args.data_format)
-    points = pc_io.load_points(args.input_files, batch_size=args.read_batch_size)
-    if with_normals:
-        normals = [PyntCloud.from_file(x).points[['nx', 'ny', 'nz']].values for x in args.input_normals]
-        points = [np.hstack((p, n)) for p, n in zip(points, normals)]
+    def save_compressed(self, grid: np.ndarray, metadata: Dict[str, Any], filename: str) -> None:
+        """Save compressed data with metadata."""
+        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+        np.savez_compressed(filename, grid=grid, metadata=metadata)
+        
+        if self.debug_output:
+            debug_path = f"{filename}.debug.npz"
+            np.savez_compressed(debug_path, **metadata)
 
-    logger.info('Performing octree partitioning')
-    # Hardcode bbox_min
-    bbox_min = [0, 0, 0]
-    if args.data_format == 'channels_first':
-        bbox_max = dense_tensor_shape[1:].copy()
-        dense_tensor_shape[1:] = dense_tensor_shape[1:] // (2 ** args.octree_level)
-    else:
-        bbox_max = dense_tensor_shape[:3].copy()
-        dense_tensor_shape[:3] = dense_tensor_shape[:3] // (2 ** args.octree_level)
-    blocks_list, binstr_list = zip(*[partition_octree(p, bbox_min, bbox_max, args.octree_level) for p in points])
-    blocks_list_flat = [y for x in blocks_list for y in x]
-    logger.info(f'Processing resolution {args.resolution} with octree level {args.octree_level} resulting in '
-                + f'dense_tensor_shape {dense_tensor_shape} and {len(blocks_list_flat)} blocks')
-
-    batch_size = 1
-    x_shape = np.concatenate(((batch_size,), dense_tensor_shape))
-
-    model = ModelConfigType[args.model_config].build()
-    model.compress(x_shape)
-
-    # Checkpoints
-    saver = tf.train.Saver(keep_checkpoint_every_n_hours=1)
-    init = tf.global_variables_initializer()
-    tf_config = tf.ConfigProto()
-    tf_config.gpu_options.allow_growth = True
-    with tf.Session(config=tf_config) as sess:
-        logger.info('Init session')
-        sess.run(init)
-
-        checkpoint = tf.train.latest_checkpoint(args.checkpoint_dir)
-        assert checkpoint is not None, f'Checkpoint {args.checkpoint_dir} was not found'
-        saver.restore(sess, checkpoint)
-
-        for i in trange(len(args.input_files)):
-            ori_file, cur_points, blocks, binstr = [x[i] for x in (args.input_files, points, blocks_list, binstr_list)]
-            n_blocks = len(blocks)
-
-            cur_output_files = [args.output_files[i*files_mult+j] for j in range(files_mult)]
-            if decode_files:
-                cur_dec_files = [args.dec_files[i*files_mult+j] for j in range(files_mult)]
-            assert len(set(cur_output_files)) == len(cur_output_files), f'{cur_output_files} should have no duplicates'
-            logger.info(f'Starting {ori_file} to {", ".join(cur_output_files)} with {n_blocks} blocks')
-            data_list, data, debug_t_list = model.compress_blocks(sess, blocks, binstr, cur_points, args.resolution,
-                                                                  args.octree_level, with_normals=with_normals,
-                                                                  opt_metrics=args.opt_metrics, max_deltas=args.max_deltas,
-                                                                  fixed_threshold=args.fixed_threshold, debug=args.debug)
-            assert len(data_list) == files_mult
-
-            for j in range(len(cur_output_files)):
-                of, cur_data_list, cur_data = [x[j] for x in (cur_output_files, data_list, data)]
-                os.makedirs(os.path.split(of)[0], exist_ok=True)
-                with gzip.open(of, "wb") as f:
-                    ret = save_compressed_file(binstr, cur_data_list, args.resolution, args.octree_level)
-                    f.write(ret)
-                if decode_files:
-                    pc_io.write_df(cur_dec_files[j], pc_io.pa_to_df(cur_data['blocks_full']))
-                with open(of + '.enc.metric.json', 'w') as f:
-                    json.dump(cur_data['metrics'], f, sort_keys=True, indent=4)
-                if args.debug:
-                    pc_io.write_df(of + '.enc.ply', pc_io.pa_to_df(cur_data['blocks_full']))
-
-                    write_pcs(blocks, of + '.ori.blocks')
-                    write_pcs(cur_data['x_hat_list'], of + '.enc.blocks')
-                    write_pcs(cur_data['blocks_depart'], of + '.enc.blocks.depart')
-                    np.savez_compressed(of + '.enc.data.npz', data=cur_data_list, debug_t_list=debug_t_list)
-
-            logger.info(f'Finished {ori_file} to {", ".join(cur_output_files)} with {n_blocks} blocks')
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        prog='compress_octree.py',
-        description='Compress a file.',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument(
-        '--input_files', nargs='+',
-        help='Input files.', required=True)
-    parser.add_argument(
-        '--output_files', nargs='+',
-        help='Output files. If input normals are provided, specify two output files per input file.', required=True)
-    parser.add_argument(
-        '--input_normals', nargs='+',
-        help='Input normals. If provided, two output paths are needed for each input file for D1 and D2 optimization.')
-    parser.add_argument(
-        '--dec_files', nargs='*',
-        help='Decoded files. Allows compression/decompression in a single execution. If input normals are provided, '
-             + 'specify two decoded files per input file.')
-    parser.add_argument(
-        '--checkpoint_dir',
-        help='Directory where to save/load model checkpoints.', required=True)
-    parser.add_argument(
-        '--model_config',
-        help=f'Model used: {ModelConfigType.keys()}.', required=True)
-    parser.add_argument(
-        '--opt_metrics', nargs='+', default=['d1_psnr'],
-        help=f'Optimization metrics used. Available: {avail_opt_metrics}')
-    parser.add_argument(
-        '--max_deltas', nargs='+', default=[np.inf], type=float,
-        help=f'Max deltas tested during optimization.')
-    parser.add_argument(
-        '--fixed_threshold', default=False, action='store_true',
-        help='Enable fixed thresholding.')
-    parser.add_argument(
-        '--read_batch_size', type=int, default=1,
-        help='Batch size for parallel reading.')
-    parser.add_argument(
-        '--resolution',
-        type=int, help='Dataset resolution.', default=64)
-    parser.add_argument(
-        '--octree_level',
-        type=int, help='Octree level.', default=4)
-    parser.add_argument(
-        '--num_filters', type=int, default=32,
-        help='Number of filters per layer.')
-    parser.add_argument(
-        '--data_format', default='channels_first',
-        help='Data format used: channels_first or channels_last')
-    parser.add_argument(
-        '--debug', default=False, action='store_true',
-        help='Output debug data for point cloud.')
-
-    args = parser.parse_args()
-
-    compress()
-    # cProfile.run('compress()')
+    def load_compressed(self, filename: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Load compressed data with metadata."""
+        data = np.load(filename, allow_pickle=True)
+        return data['grid'], data['metadata'].item()

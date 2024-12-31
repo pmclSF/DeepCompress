@@ -1,149 +1,266 @@
-# Improved Deep Point Cloud Geometry Compression
+# DeepCompress: Efficient Point Cloud Geometry Compression
 
-<p align="center">
-  <img src="image.png?raw=true" alt="Comparison samples"/>
-</p>
+![DeepCompress comparison samples](image.png)
 
+## Authors
 
-* **Authors**:
-[Maurice Quach](https://scholar.google.com/citations?user=atvnc2MAAAAJ),
-[Giuseppe Valenzise](https://scholar.google.com/citations?user=7ftDv4gAAAAJ) and
-[Frederic Dufaux](https://scholar.google.com/citations?user=ziqjbTIAAAAJ)  
-* **Affiliation**: Université Paris-Saclay, CNRS, CentraleSupélec, Laboratoire des signaux et systèmes, 91190 Gif-sur-Yvette, France
-* **Funding**: ANR ReVeRy national fund (REVERY ANR-17-CE23-0020)
-* **Links**: [[Paper]](https://arxiv.org/abs/2006.09043)
+- [Ryan Killea](https://rbkillea.com/)
+- [Saeed Bastani](https://scholar.google.com/citations?user=m0tkD4YAAAAJ&hl=en)
+- Yun Li
+- [Paul McLachlan](http://pmclachlan.com)
 
-## Experimental data
+**Affiliation**: Ericsson Research  
+**Paper**: [Research Paper (arXiv)](https://arxiv.org/abs/2106.01504)
 
-We provide the full experimental data used for the paper. This includes:
-- In `models`, all trained models
-- In `results/data.csv`, bitrates and objective metric values for all models, point clouds and metrics (D1/D2)
-- Compressed and decompressed point clouds for all models (c1 to c6, G-PCC trisoup, G-PCC octree)
+## Abstract
 
-[Download experimental data](https://drive.google.com/file/d/18uHmr0ZpgFLeL9Y5TUFTsQkRfz4XpQdJ/view?usp=sharing)
+Point clouds are a basic data type of growing interest due to their use in applications such as virtual, augmented, and mixed reality, and autonomous driving. This work presents DeepCompress, a deep learning-based encoder for point cloud compression that achieves efficiency gains without significantly impacting compression quality. Through optimization of convolutional blocks and activation functions, our architecture reduces the computational cost by 8% and model parameters by 20%, with only minimal increases in bit rate and distortion.
+
+## Reproducing Paper Results
+
+### 1. Environment Setup
+```bash
+# Clone repository
+git clone https://github.com/ericsson/deepcompress.git
+cd deepcompress
+
+# Create and activate virtual environment
+python -m venv env
+source env/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create necessary directories
+mkdir -p data/modelnet40
+mkdir -p data/8ivfb
+mkdir -p results/models
+mkdir -p results/metrics
+```
+
+### 2. Dataset Preparation
+```bash
+# Download and prepare ModelNet40
+wget http://modelnet.cs.princeton.edu/ModelNet40.zip
+unzip ModelNet40.zip -d data/modelnet40/
+
+# Download 8iVFB dataset
+# Note: Requires registration at http://plenodb.jpeg.org
+mv 8iVFB_v2.zip data/8ivfb/
+unzip data/8ivfb/8iVFB_v2.zip -d data/8ivfb/
+
+# Process ModelNet40 for training
+python ds_select_largest.py \
+    data/modelnet40/ModelNet40 \
+    data/modelnet40/ModelNet40_200 \
+    200
+
+python ds_mesh_to_pc.py \
+    data/modelnet40/ModelNet40_200 \
+    data/modelnet40/ModelNet40_200_pc512 \
+    --vg_size 512
+
+python ds_pc_octree_blocks.py \
+    data/modelnet40/ModelNet40_200_pc512 \
+    data/modelnet40/ModelNet40_200_pc512_oct3 \
+    --vg_size 512 \
+    --level 3
+
+python ds_select_largest.py \
+    data/modelnet40/ModelNet40_200_pc512_oct3 \
+    data/modelnet40/ModelNet40_200_pc512_oct3_4k \
+    4000
+```
+
+### 3. Training Pipeline
+```bash
+# Create training configuration
+cat > config/train_config.yml << EOL
+data:
+  modelnet40_path: "data/modelnet40/ModelNet40_200_pc512_oct3_4k"
+  ivfb_path: "data/8ivfb"
+  resolution: 64
+  block_size: 1.0
+  min_points: 100
+  augment: true
+
+model:
+  filters: 64
+  activation: "cenic_gdn"
+  conv_type: "separable"
+
+training:
+  batch_size: 32
+  epochs: 100
+  learning_rates:
+    reconstruction: 1.0e-4
+    entropy: 1.0e-3
+  focal_loss:
+    alpha: 0.75
+    gamma: 2.0
+  checkpoint_dir: "results/models"
+EOL
+
+# Train model
+python training_pipeline.py config/train_config.yml
+```
+
+### 4. Evaluation Pipeline
+```bash
+# Run evaluation on 8iVFB dataset
+python evaluation_pipeline.py \
+    config/train_config.yml \
+    --checkpoint results/models/best_model
+
+# Generate comparison metrics
+python ev_compare.py \
+    --original data/8ivfb \
+    --compressed results/compressed \
+    --output results/metrics
+
+# Generate visualizations
+python ev_run_render.py config/train_config.yml
+```
+
+### 5. Compare with G-PCC
+```bash
+# Run G-PCC experiments
+python mp_run.py config/train_config.yml --num_parallel 8
+
+# Generate final report
+python mp_report.py \
+    results/metrics/evaluation_report.json \
+    results/metrics/final_report.json
+```
+
+### Expected Results
+
+After running the complete pipeline, you should observe:
+- 8% reduction in total operations
+- 20% reduction in model parameters
+- D1 metric: 0.02% penalty
+- D2 metric: 0.32% increased bit rate
+
+The results can be found in:
+- Model checkpoints: `results/models/`
+- Evaluation metrics: `results/metrics/final_report.json`
+- Visualizations: `results/visualizations/`
 
 ## Prerequisites
 
-* Python 3.6.9
-* Tensorflow 1.15.0 with CUDA 10.0.130 and cuDNN 7.4.2
-* [tensorflow-compression](https://github.com/tensorflow/compression) 1.3
-* MPEG G-PCC codec [mpeg-pcc-tmc13](https://github.com/MPEGGroup/mpeg-pcc-tmc13): necessary only to compare results with G-PCC,
-to obtain more recent versions you need to register on the [MPEG Gitlab](http://mpegx.int-evry.fr/software/MPEG/PCC/) and request the permissions for `MPEG/PCC`
-* MPEG metric software v0.12.3 [mpeg-pcc-dmetric](http://mpegx.int-evry.fr/software/MPEG/PCC/mpeg-pcc-dmetric):
-available on the [MPEG Gitlab](http://mpegx.int-evry.fr/software/MPEG/PCC/), you need to register and request the permissions for `MPEG/PCC`
-* MPEG PCC dataset: refer to Common Test Conditions (CTCs) to download the full dataset,
-you can also get some point clouds from [JPEG Pleno](http://plenodb.jpeg.org/).
-* packages in `requirements.txt`
+### Required Software
 
-*Note 1*: using a Linux distribution such as Ubuntu is highly recommended  
-*Note 2*: CTCs can be found at [wg11.sc29.org](http://wg11.sc29.org) in
-All Meetings > Latest Meeting > Output documents "Common test conditions for point cloud compression".
-For example, "Common test conditions for PCC", in ISO/IEC JTC1/SC29/WG11 MPEG output document N19324 is in the Alpbach meeting 130.
+- Python 3.8+
+- MPEG G-PCC codec [mpeg-pcc-tmc13](https://github.com/MPEGGroup/mpeg-pcc-tmc13)
+- MPEG metric software v0.12.3 [mpeg-pcc-dmetric](http://mpegx.int-evry.fr/software/MPEG/PCC/mpeg-pcc-dmetric)
+- MPEG PCC dataset
 
-## Getting started
+### Dependencies
 
-### Configuration
+Required packages:
+- tensorflow >= 2.11.0
+- tensorflow-probability >= 0.19.0
+- matplotlib ~= 3.1.3
+- numpy ~= 1.23.0
+- pandas ~= 1.4.0
+- pyyaml ~= 5.1.2
+- scipy ~= 1.8.1
+- numba ~= 0.55.0
 
-Adapt the configurations in `ev_experiment.yml` to your particular setup:
-* `MPEG_TMC13_DIR`: G-PCC folder (`mpeg-pcc-tmc13`)
-* `PCERROR`: `mpeg-pcc-dmetric` folder
-* `MPEG_DATASET_DIR`: MPEG PCC dataset folder
-* `TRAIN_DATASET_PATH`: Path to training dataset
-* `TRAIN_RESOLUTION`: Resolution of the training dataset
-* `EXPERIMENT_DIR`: Experiment folder, all results are saved in this folder, it needs to be created manually
+## Model Architecture
 
-### Datasets
+### Network Overview
+- Analysis-synthesis architecture with scale hyperprior
+- Incorporates GDN/CENIC-GDN activation functions
+- Novel 1+2D spatially separable convolutional blocks
+- Progressive channel expansion with dimension reduction
 
-First, download the ModelNet40 manually aligned dataset: [http://modelnet.cs.princeton.edu](http://modelnet.cs.princeton.edu).  
-Then, we generate the training dataset specified in our paper (block size 64) with the following commands:
+### Key Components
+- **Analysis Network**: Processes input point clouds through multiple analysis blocks
+- **Synthesis Network**: Reconstructs point clouds from compressed representations
+- **Hyperprior**: Learns and encodes additional parameters for entropy modeling
+- **Custom Activation**: Uses CENIC-GDN for improved efficiency
 
-    python ds_select_largest.py ~/data/datasets/ModelNet40 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200 200
-    python ds_mesh_to_pc.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512 --vg_size 512
-    python ds_pc_octree_blocks.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3 --vg_size 512 --level 3 
-    python ds_select_largest.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3_4k 4000
+### Spatially Separable Design
+The architecture employs 1+2D convolutions instead of full 3D convolutions, providing:
+- More parameter efficiency for same input/output channels
+- Reduced operation count
+- Better filter utilization
+- Encoded knowledge of point cloud surface properties
 
-### Run experiments
+## Implementation Details
 
-Run G-PCC experiments:
+### Point Cloud Metrics
 
-    python mp_run.py ev_experiment.yml
+```python
+from pc_metric import calculate_metrics
 
-*Note 1*: It is **highly** recommended to set `EXPERIMENT_DIR` on an SSD drive.
-On an HDD, it is recommended to add the `--num_parallel 1` option as it can be extremely slow otherwise.  
-    
-Train all models, run experiments and compare results:
+metrics = calculate_metrics(predicted_points, ground_truth_points)
+print(f"D1: {metrics['d1']}")
+print(f"D2: {metrics['d2']}")
+print(f"Chamfer: {metrics['chamfer']}")
+```
 
-    python tr_train_all.py ev_experiment.yml && \
-    python ev_run_experiment.py ev_experiment.yml --num_parallel 8 && \
-    python ev_run_compare.py ev_experiment.yml
+Supported metrics include:
+- **D1**: Point-to-point distances from predicted to ground truth
+- **D2**: Point-to-point distances from ground truth to predicted
+- **Chamfer Distance**: Combined D1 + D2 metric
+- **Normal-based metrics** (when normals are available):
+  - N1: Point-to-normal distances from predicted to ground truth
+  - N2: Point-to-normal distances from ground truth to predicted
 
-*Note 1*: In the provided configuration `ev_experiment.yml`, a **large** number of models are trained. This takes about 4 days on an Nvidia GeForce GTX 1080 Ti.
-*Note 2*: Adjust the `--num_parallel` option for `ev_run_experiment.py` depending on your GPU memory.
-With 11GB, we've found 8 to leave a fair amount of GPU memory available.
+### Data Processing Pipeline
 
-To build the LaTeX tables and gather the figures:
+```python
+# Analysis Transform for encoding
+transform = AnalysisTransform(
+    filters=64,
+    kernel_size=(3, 3, 3),
+    strides=(2, 2, 2)
+)
 
-    python ut_build_paper.py ev_experiment.yml figs/
+# Synthesis Transform for decoding
+synthesis = SynthesisTransform(
+    filters=32,
+    kernel_size=(3, 3, 3),
+    strides=(2, 2, 2)
+)
+```
 
-To render the point clouds and the visual comparisons:
+Key components:
+- Residual connections
+- Custom activation functions
+- Normalization layers
+- Efficient 3D convolutions
 
-    python ut_run_render.py ev_experiment.yml
+## Project Structure
 
-To draw the training plots from tfevents data:
+### Source Code (`/src`)
 
-    python ut_tensorboard_plots.py ev_experiment.yml
+- **Core Processing**
+  - `compress_octree.py`: Point cloud octree compression
+  - `decompress_octree.py`: Point cloud decompression
+  - `ds_mesh_to_pc.py`: Mesh to point cloud conversion
+  - `ds_pc_octree_blocks.py`: Octree block partitioning
+  - `ds_select_largest.py`: Large point cloud selection
 
-## Overview
+- **Evaluation & Comparison**
+  - `ev_compare.py`: Results comparison
+  - `ev_experiment.yml`: Experiment configuration
+  - `ev_run_experiment.py`: Experiment execution
+  - `ev_run_render.py`: Point cloud rendering
+  - `experiment.py`: Core experiment utilities
 
-    ├── requirements.txt                            package requirements
-    └── src
-        ├── compress_octree.py                      [Coding] Compress a point cloud
-        ├── decompress_octree.py                    [Coding] Decompress a point cloud
-        ├── ds_mesh_to_pc.py                        [Dataset] Convert mesh to point cloud
-        ├── ds_pc_octree_blocks.py                  [Dataset] Divide a point cloud into octree blocks
-        ├── ds_select_largest.py                    [Dataset] Select the N largest files from a folder
-        ├── ev_compare.py                           [Eval] Compare results (curves, BD-Rates and BD-PSNRs...)
-        ├── ev_experiment.py                        [Eval] Run pipeline for a point cloud (compress, decompress, eval)
-        ├── ev_experiment.yml                       [Config] Experimental configuration
-        ├── ev_run_compare.py                       [Eval] Compare results for the experimental configuration
-        ├── ev_run_experiment.py                    [Eval] Run pipelines for the experimental configuration
-        ├── map_color.py                            [Utils] Transfer colors from a point cloud onto another
-        ├── model_configs.py                        [Model] Model configurations
-        ├── model_opt.py                            [Model] Threshold optimization
-        ├── model_syntax.py                         [Model] Bitsream specification
-        ├── model_transforms.py                     [Model] Transforms configurations
-        ├── model_types.py                          [Model] Model types
-        ├── mp_report.py                            [MPEG] Generate JSON report for a G-PCC folder
-        ├── mp_run.py                               [MPEG] Run G-PCC for the experimental configuration
-        ├── tr_train.py                             [Train] Train a compression model
-        ├── tr_train_all.py                         [Train] Train compression models for the experimental configuration
-        ├── ut_build_paper.py                       [Utils] Create LaTeX tables and gather figures
-        ├── ut_run_render.py                        [Utils] Render point clouds and visual comparisons
-        ├── ut_tensorboard_plots.py                 [Utils] Generate plots from tfevents data
-        └── utils
-            ├── bd.py                               BD-Rate and BD-PSNR computation
-            ├── colorbar.py                         Colorbar generation
-            ├── experiment.py                       Experimental utilities
-            ├── focal_loss.py                       Focal loss
-            ├── matplotlib_utils.py                 Matplotlib utilies
-            ├── mpeg_parsing.py                     MPEG log files parsing
-            ├── o3d.py                              Open3D utilities (rendering)
-            ├── octree_coding.py                    Octree coding
-            ├── parallel_process.py                 Parallel processing
-            ├── patch_gaussian_conditional.py       Patch tensorflow-compression GaussianConditional to get debug tensors
-            ├── pc_io.py                            Point Cloud Input/Output
-            ├── pc_metric.py                        Point Cloud geometry distortion metrics (D1 and D2)
-            ├── pc_to_camera_params.py              Generate camera parameters for a Point Cloud
-            └── pc_to_img.py                        Convert a Point Cloud to an image using predefined camera parameters
+- **Model Components**
+  - `model_opt.py`: Model optimization
+  - `model_transforms.py`: Model transformations
+  - `patch_gaussian_conditional.py`: Gaussian conditional debugging
+  - `pc_metric.py`: Point cloud metrics
 
-## Citation
-
-    @misc{quach2020improved,
-        title={Improved Deep Point Cloud Geometry Compression},
-        author={Maurice Quach and Giuseppe Valenzise and Frederic Dufaux},
-        year={2020},
-        eprint={2006.09043},
-        archivePrefix={arXiv},
-        primaryClass={cs.CV}
-    }
-
+- **Support Utilities**
+  - `colorbar.py`: Visualization colorbars
+  - `map_color.py`: Color mapping
+  - `mp_report.py`, `mp_run.py`: MPEG-related utilities
+  - `octree_coding.py`: Octree encoding
+  - `parallel_process.py`: Parallel processing
+  - `tr_train.py`: Model training
