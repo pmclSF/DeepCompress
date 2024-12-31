@@ -1,15 +1,12 @@
 import sys
-from pathlib import Path
+import os
 
 # Add the 'src' directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 import unittest
-
 import tensorflow as tf
-
-from octree_coding import OctreeCoder, OctreeConfig
-
+from octree_coding import OctreeCoder
 
 class TestOctreeCoder(unittest.TestCase):
 
@@ -22,7 +19,7 @@ class TestOctreeCoder(unittest.TestCase):
             [3.0, 3.0, 3.0],
             [4.0, 4.0, 4.0]
         ], dtype=tf.float32)
-        self.coder = OctreeCoder(OctreeConfig(resolution=8))
+        self.coder = OctreeCoder(resolution=8)
 
     def test_encode(self):
         """Test encoding a point cloud into a binary voxel grid."""

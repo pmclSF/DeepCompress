@@ -1,8 +1,6 @@
-import argparse
 import os
-
+import argparse
 import tensorflow as tf
-
 
 def count_points_in_block(file_path):
     """
@@ -16,14 +14,13 @@ def count_points_in_block(file_path):
     """
     with open(file_path, "r") as f:
         header = True
-        count = 0
         for line in f:
             if header:
                 if line.startswith("end_header"):
                     header = False
                 continue
-            count += 1
-        return count
+        # Count remaining lines
+        return sum(1 for _ in f)
 
 def prioritize_blocks(input_dir, output_dir, num_blocks, criteria="points"):
     """

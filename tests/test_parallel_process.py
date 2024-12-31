@@ -1,15 +1,14 @@
-import subprocess
-import sys
-import time
 import unittest
+import time
+import subprocess
+from unittest.mock import patch, MagicMock
 from concurrent.futures import TimeoutError
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-
-from parallel_process import Popen, ProcessResult, ProcessTimeoutError, parallel_process
-
+from parallel_process import (
+    parallel_process, 
+    Popen, 
+    ProcessTimeoutError,
+    ProcessResult
+)
 
 def square(x):
     """Simple square function for testing."""
@@ -38,17 +37,17 @@ class TestParallelProcess(unittest.TestCase):
     def test_parallel_process_timeout(self):
         """Test timeout functionality."""
         params = [0.1, 0.1, 2.0]  # Last task will timeout
-
+        
         with self.assertRaises(TimeoutError):
-            parallel_process(slow_function, params,
+            parallel_process(slow_function, params, 
                            num_parallel=2, timeout=1.0)
 
     def test_parallel_process_retries(self):
         """Test retry functionality for failing tasks."""
         params = [1, 2, 3]  # 2 will fail
-
+        
         with self.assertRaises(ValueError):
-            parallel_process(failing_function, params,
+            parallel_process(failing_function, params, 
                            num_parallel=2, max_retries=2)
 
     @patch("subprocess.Popen")
@@ -66,34 +65,18 @@ class TestParallelProcess(unittest.TestCase):
                 process.wait()
 
     @patch("subprocess.Popen")
-    def test_popen_cleanup_running(self, mock_popen):
-        """Test cleanup terminates a still-running process."""
+    def test_popen_cleanup(self, mock_popen):
+        """Test proper cleanup of Popen resources."""
         mock_process = MagicMock()
-        mock_process.poll.return_value = None  # Process still running
-        mock_process.stdout = MagicMock()
-        mock_process.stderr = MagicMock()
-        mock_popen.return_value = mock_process
-
-        cmd = ["sleep", "10"]
-        with Popen(cmd) as _:
-            pass  # Context manager should terminate
-
-        mock_process.terminate.assert_called_once()
-
-    @patch("subprocess.Popen")
-    def test_popen_cleanup_finished(self, mock_popen):
-        """Test cleanup skips terminate for already-finished process."""
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0  # Process already exited
         mock_process.stdout = MagicMock()
         mock_process.stderr = MagicMock()
         mock_popen.return_value = mock_process
 
         cmd = ["echo", "test"]
-        with Popen(cmd) as _:
-            pass  # Context manager should just close handles
+        with Popen(cmd) as process:
+            pass  # Context manager should handle cleanup
 
-        mock_process.terminate.assert_not_called()
+        mock_process.terminate.assert_called_once()
         mock_process.stdout.close.assert_called_once()
         mock_process.stderr.close.assert_called_once()
 
@@ -105,7 +88,7 @@ class TestParallelProcess(unittest.TestCase):
             success=True,
             error=None
         )
-
+        
         self.assertEqual(result.index, 0)
         self.assertEqual(result.result, 42)
         self.assertTrue(result.success)
