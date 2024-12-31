@@ -16,177 +16,156 @@
 
 Point clouds are a basic data type of growing interest due to their use in applications such as virtual, augmented, and mixed reality, and autonomous driving. This work presents DeepCompress, a deep learning-based encoder for point cloud compression that achieves efficiency gains without significantly impacting compression quality. Through optimization of convolutional blocks and activation functions, our architecture reduces the computational cost by 8% and model parameters by 20%, with only minimal increases in bit rate and distortion.
 
-## Experimental Data
+## Reproducing Paper Results
 
-We provide comprehensive experimental data including:
+### 1. Environment Setup
+```bash
+# Clone repository
+git clone https://github.com/ericsson/deepcompress.git
+cd deepcompress
 
-- Trained models in the `models/` directory
-- Bitrates and objective metric values (D1/D2) for all models and point clouds in `results/data.csv`
-- Compressed and decompressed point clouds for all models (c1 to c6, G-PCC trisoup, G-PCC octree)
+# Create and activate virtual environment
+python -m venv env
+source env/bin/activate
 
-[Download the experimental data](https://drive.google.com/file/d/18uHmr0ZpgFLeL9Y5TUFTsQkRfz4XpQdJ/view?usp=sharing)
+# Install dependencies
+pip install -r requirements.txt
+
+# Create necessary directories
+mkdir -p data/modelnet40
+mkdir -p data/8ivfb
+mkdir -p results/models
+mkdir -p results/metrics
+```
+
+### 2. Dataset Preparation
+```bash
+# Download and prepare ModelNet40
+wget http://modelnet.cs.princeton.edu/ModelNet40.zip
+unzip ModelNet40.zip -d data/modelnet40/
+
+# Download 8iVFB dataset
+# Note: Requires registration at http://plenodb.jpeg.org
+mv 8iVFB_v2.zip data/8ivfb/
+unzip data/8ivfb/8iVFB_v2.zip -d data/8ivfb/
+
+# Process ModelNet40 for training
+python ds_select_largest.py \
+    data/modelnet40/ModelNet40 \
+    data/modelnet40/ModelNet40_200 \
+    200
+
+python ds_mesh_to_pc.py \
+    data/modelnet40/ModelNet40_200 \
+    data/modelnet40/ModelNet40_200_pc512 \
+    --vg_size 512
+
+python ds_pc_octree_blocks.py \
+    data/modelnet40/ModelNet40_200_pc512 \
+    data/modelnet40/ModelNet40_200_pc512_oct3 \
+    --vg_size 512 \
+    --level 3
+
+python ds_select_largest.py \
+    data/modelnet40/ModelNet40_200_pc512_oct3 \
+    data/modelnet40/ModelNet40_200_pc512_oct3_4k \
+    4000
+```
+
+### 3. Training Pipeline
+```bash
+# Create training configuration
+cat > config/train_config.yml << EOL
+data:
+  modelnet40_path: "data/modelnet40/ModelNet40_200_pc512_oct3_4k"
+  ivfb_path: "data/8ivfb"
+  resolution: 64
+  block_size: 1.0
+  min_points: 100
+  augment: true
+
+model:
+  filters: 64
+  activation: "cenic_gdn"
+  conv_type: "separable"
+
+training:
+  batch_size: 32
+  epochs: 100
+  learning_rates:
+    reconstruction: 1.0e-4
+    entropy: 1.0e-3
+  focal_loss:
+    alpha: 0.75
+    gamma: 2.0
+  checkpoint_dir: "results/models"
+EOL
+
+# Train model
+python training_pipeline.py config/train_config.yml
+```
+
+### 4. Evaluation Pipeline
+```bash
+# Run evaluation on 8iVFB dataset
+python evaluation_pipeline.py \
+    config/train_config.yml \
+    --checkpoint results/models/best_model
+
+# Generate comparison metrics
+python ev_compare.py \
+    --original data/8ivfb \
+    --compressed results/compressed \
+    --output results/metrics
+
+# Generate visualizations
+python ev_run_render.py config/train_config.yml
+```
+
+### 5. Compare with G-PCC
+```bash
+# Run G-PCC experiments
+python mp_run.py config/train_config.yml --num_parallel 8
+
+# Generate final report
+python mp_report.py \
+    results/metrics/evaluation_report.json \
+    results/metrics/final_report.json
+```
+
+### Expected Results
+
+After running the complete pipeline, you should observe:
+- 8% reduction in total operations
+- 20% reduction in model parameters
+- D1 metric: 0.02% penalty
+- D2 metric: 0.32% increased bit rate
+
+The results can be found in:
+- Model checkpoints: `results/models/`
+- Evaluation metrics: `results/metrics/final_report.json`
+- Visualizations: `results/visualizations/`
 
 ## Prerequisites
 
 ### Required Software
 
-- Python 3.6.9+
+- Python 3.8+
 - MPEG G-PCC codec [mpeg-pcc-tmc13](https://github.com/MPEGGroup/mpeg-pcc-tmc13)
 - MPEG metric software v0.12.3 [mpeg-pcc-dmetric](http://mpegx.int-evry.fr/software/MPEG/PCC/mpeg-pcc-dmetric)
 - MPEG PCC dataset
 
 ### Dependencies
 
-```bash
-# Install required Python packages
-pip install -r requirements.txt
-```
-
 Required packages:
+- tensorflow >= 2.11.0
+- tensorflow-probability >= 0.19.0
 - matplotlib ~= 3.1.3
-- pyntcloud ~= 0.1.2
 - numpy ~= 1.23.0
 - pandas ~= 1.4.0
-- tqdm ~= 4.64.0
-- tensorflow ~= 2.11.0
 - pyyaml ~= 5.1.2
-- pytest ~= 7.1.0
 - scipy ~= 1.8.1
 - numba ~= 0.55.0
-
-### Environment Configuration
-
-Create a `ev_experiment.yml` file with the following structure:
-
-```yaml
-# Environment paths
-MPEG_TMC13_DIR: "/path/to/mpeg-pcc-tmc13"
-PCERROR: "/path/to/mpeg-pcc-dmetric/test/pc_error_d"
-MPEG_DATASET_DIR: "/path/to/mpeg_pcc"
-TRAIN_DATASET_PATH: "/path/to/ModelNet40_200_pc512_oct3_4k/**/*.ply"
-TRAIN_RESOLUTION: 64
-EXPERIMENT_DIR: "/path/to/experiments"
-
-# Training parameters
-batch_size: 32
-alpha: 0.9
-gamma: 2.0
-train_mode: "independent"
-fixed_threshold: True
-
-# Model configurations
-model_configs:
-  - id: 'c4-ws'
-    config: 'c3p'
-    lambdas: [3.0e-4, 1.0e-4, 5.0e-5, 2.0e-5, 1.0e-5]
-    alpha: 0.75
-    train_mode: 'warm_seq'
-    label: 'c6'
-  # Additional configurations...
-```
-
-**Note**: For parallel MPEG experiments, storing the `EXPERIMENT_DIR` on an SSD is highly recommended.
-
-### Notes
-
-- Linux distribution (Ubuntu recommended) is preferred
-- CTCs available at [wg11.sc29.org](http://wg11.sc29.org) under "All Meetings > Latest Meeting > Output documents"
-
-## Configuration
-
-Edit `ev_experiment.yml` with your environment settings:
-
-```yaml
-MPEG_TMC13_DIR: "/path/to/gpcc"
-PCERROR: "/path/to/dmetric"
-MPEG_DATASET_DIR: "/path/to/dataset"
-TRAIN_DATASET_PATH: "/path/to/training"
-TRAIN_RESOLUTION: "resolution_value"
-EXPERIMENT_DIR: "/path/to/results"
-```
-
-## Dataset Preparation
-
-1. Download ModelNet40 dataset from [modelnet.cs.princeton.edu](http://modelnet.cs.princeton.edu)
-
-2. Generate training dataset:
-
-   ```bash
-   # Select largest point clouds
-   python ds_select_largest.py ~/data/datasets/ModelNet40 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200 200
-
-   # Convert meshes to point clouds
-   python ds_mesh_to_pc.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512 --vg_size 512
-
-   # Partition into octree blocks
-   python ds_pc_octree_blocks.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3 --vg_size 512 --level 3
-
-   # Select largest blocks
-   python ds_select_largest.py ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3 ~/data/datasets/pcc_geo_cnn_v2/ModelNet40_200_pc512_oct3_4k 4000
-   ```
-
-## Running Experiments
-
-### G-PCC Experiments
-
-```bash
-python mp_run.py ev_experiment.yml
-```
-
-**Note**: For HDD installations, use `--num_parallel 1` to avoid performance issues.
-
-### Training and Evaluation
-
-Run complete pipeline:
-
-```bash
-python tr_train.py ev_experiment.yml && \
-python ev_run_experiment.py ev_experiment.yml --num_parallel 8 && \
-python ev_run_compare.py ev_experiment.yml
-```
-
-**Note**: Training typically takes 4 days on an Nvidia GeForce GTX 1080 Ti. Adjust `--num_parallel` based on available GPU memory.
-
-### Hyperparameter Tuning
-
-1. Start tuning:
-   ```bash
-   python tr_train.py ev_experiment.yml --tune --num_epochs 10
-   ```
-
-2. Hyperparameter search space:
-   ```python
-   def create_model(hp):
-       model = tf.keras.Sequential()
-       model.add(tf.keras.layers.InputLayer(input_shape=(2048, 3)))
-       
-       # Layer configuration
-       for i in range(hp.Int('num_layers', 1, 5)):
-           model.add(tf.keras.layers.Dense(
-               hp.Int(f'layer_{i}_units', min_value=64, max_value=1024, step=64),
-               activation='relu'
-           ))
-       
-       model.add(tf.keras.layers.Dense(3, activation='sigmoid'))
-       
-       # Optimizer configuration
-       model.compile(
-           optimizer=tf.keras.optimizers.Adam(
-               learning_rate=hp.Float('learning_rate', 1e-5, 1e-3, sampling='log')
-           ),
-           loss='mean_squared_error'
-       )
-       return model
-   ```
-
-### Evaluation and Visualization
-
-Generate performance plots and visualizations:
-
-```bash
-python ut_run_render.py ev_experiment.yml
-python ut_tensorboard_plots.py ev_experiment.yml
-```
 
 ## Model Architecture
 
@@ -213,8 +192,6 @@ The architecture employs 1+2D convolutions instead of full 3D convolutions, prov
 
 ### Point Cloud Metrics
 
-The `pc_metric.py` module provides efficient implementations of standard point cloud metrics:
-
 ```python
 from pc_metric import calculate_metrics
 
@@ -232,38 +209,7 @@ Supported metrics include:
   - N1: Point-to-normal distances from predicted to ground truth
   - N2: Point-to-normal distances from ground truth to predicted
 
-Performance optimizations:
-- KD-tree acceleration for nearest neighbor searches
-- Parallel computation using Numba
-- Efficient memory management for large point clouds
-
 ### Data Processing Pipeline
-
-1. **Mesh to Point Cloud Conversion** (`ds_mesh_to_pc.py`):
-   ```bash
-   python ds_mesh_to_pc.py input.off output.ply \
-       --num_points 2048 \
-       --compute_normals
-   ```
-   Features:
-   - Surface-aware point sampling
-   - Normal computation
-   - PLY format output
-   
-2. **Octree Partitioning** (`ds_pc_octree_blocks.py`):
-   ```bash
-   python ds_pc_octree_blocks.py input.ply blocks/ \
-       --block_size 1.0 \
-       --min_points 100
-   ```
-   Features:
-   - Adaptive block sizing
-   - Minimum point threshold
-   - Parallel block processing
-
-### Model Architecture
-
-The model uses custom transforms defined in `model_transforms.py`:
 
 ```python
 # Analysis Transform for encoding
@@ -286,106 +232,6 @@ Key components:
 - Custom activation functions
 - Normalization layers
 - Efficient 3D convolutions
-
-### Parallel Processing
-
-The `parallel_process.py` module provides robust parallel execution:
-
-```python
-from parallel_process import parallel_process
-
-results = parallel_process(
-    process_function,
-    parameter_list,
-    num_parallel=4,
-    max_retries=3,
-    timeout=300
-)
-```
-
-Features:
-- Automatic retry mechanism
-- Timeout handling
-- Result ordering preservation
-- Resource management
-
-2. **Hyperparameter Tuning**:
-   ```bash
-   python tr_train.py input_dir output_dir --tune --num_epochs 10
-   ```
-   Tunes key parameters:
-   - Number of layers (1-5)
-   - Units per layer (64-1024)
-   - Learning rate (1e-5 to 1e-3)
-
-3. **Model Training**:
-   ```bash
-   python tr_train.py input_dir output_dir --batch_size 32 --num_epochs 10
-   ```
-   Parameters:
-   - Optimization: Adam optimizer (β1=0.9, β2=0.999)
-   - Learning rates:
-     - Reconstruction: 1×10⁻⁴
-     - Entropy bottleneck: 1×10⁻³
-   - Loss function: Focal loss (α=0.75, γ=2)
-
-4. **Model Optimization**:
-   The `ModelOptimizer` class provides:
-   - Gradient-based optimization
-   - Batch processing
-   - Progress tracking
-   - Model evaluation
-
-### Running Experiments
-
-```bash
-# Train all models
-python tr_train.py ev_experiment.yml
-
-# Run experiments with parallel processing
-python ev_run_experiment.py ev_experiment.yml --num_parallel 8
-
-# Compare results
-python ev_run_compare.py ev_experiment.yml
-```
-
-For visualization and analysis:
-```bash
-# Generate rendered visualizations
-python ut_run_render.py ev_experiment.yml
-
-# Create training plots
-python ut_tensorboard_plots.py ev_experiment.yml
-```
-
-## Evaluation Metrics
-
-We evaluate point cloud compression quality using several geometry preservation and distortion metrics:
-
-### Distance-based Metrics
-
-- **D1 Metric**: Mean closest point distance from predicted points to ground truth
-- **D2 Metric**: Mean closest point distance from ground truth to predicted points
-- **Chamfer Distance**: Symmetric metric combining D1 and D2 distances
-
-### Normal-based Metrics
-
-- **N1**: Point-to-normal distance between predicted points and ground truth normals
-- **N2**: Point-to-normal distance between ground truth points and predicted normals
-- **Normal Chamfer**: Combined sum of N1 and N2 distances
-
-### Usage Example
-
-```python
-from pc_metric import calculate_metrics
-
-predicted_points = ...  # Your predicted point cloud
-ground_truth_points = ... # Your ground truth point cloud
-
-metrics = calculate_metrics(predicted_points, ground_truth_points)
-print("D1:", metrics['d1'])
-print("D2:", metrics['d2'])
-```
 
 ## Project Structure
 
@@ -418,32 +264,3 @@ print("D2:", metrics['d2'])
   - `octree_coding.py`: Octree encoding
   - `parallel_process.py`: Parallel processing
   - `tr_train.py`: Model training
-
-### Tests (`/test`)
-
-- **Data Processing Tests**
-  - `test_ds_mesh_to_pc.py`
-  - `test_ds_pc_octree_blocks.py`
-  - `test_ds_select_largest.py`
-
-- **Evaluation Tests**
-  - `test_ev_compare.py`
-  - `test_ev_run_experiment.py`
-  - `test_ev_run_render.py`
-  - `test_experiment.py`
-
-- **Model Tests**
-  - `test_model_opt.py`
-  - `test_model_transforms.py`
-  - `test_patch_gaussian_conditional.py`
-  - `test_pc_metric.py`
-  - `test_tr_train.py`
-
-- **Utility Tests**
-  - `test_colorbar.py`
-  - `test_compress_octree.py`
-  - `test_map_color.py`
-  - `test_mp_report.py`
-  - `test_mp_run.py`
-  - `test_octree_coding.py`
-  - `test_parallel_process.py`
