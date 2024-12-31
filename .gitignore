@@ -1,6 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+*.egg-info/
+*.egg
+
 # Virtual Environment
 env/
-*.dylib
-*.so
-__pycache__/
-*.pyc
+venv/
+ENV/
+
+# Project specific
+/myutils/
+/DeepCompress/
+.DS_Store
