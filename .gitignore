@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Python-specific
 __pycache__/
 *.pyc
@@ -8,34 +7,25 @@ __pycache__/
 env/
 .venv/
 
+# Ignore specific environment files
+env/lib/python3.8/site-packages/open3d/cpu/pybind.cpython-38-darwin.so
+env/lib/python3.8/site-packages/tensorflow/libtensorflow_cc.2.dylib
+
 # Jupyter notebooks
 .ipynb_checkpoints/
 
 # System-specific
 .DS_Store
 Thumbs.db
+.AppleDouble
+.LSOverride
 
 # Log files
 *.log
-=======
+
 # Ignore all shell scripts
 *.sh
 
-# Ignore the /env directory
+# Custom directories
 /env/
-
-# Ignore the /myutils directory
 /myutils/
-
-# Ignore macOS system files
-.DS_Store
-.AppleDouble
-.LSOverride
-<<<<<<< HEAD
->>>>>>> e9a168e1b (Add .gitignore to exclude shell scripts, /env, /myutils, and macOS system files)
-=======
-.DS_Store
->>>>>>> 997bad11c (Add .DS_Store to .gitignore)
-env/
-/env/lib/python3.8/site-packages/open3d/cpu/pybind.cpython-38-darwin.so
-/env/lib/python3.8/site-packages/tensorflow/libtensorflow_cc.2.dylib
