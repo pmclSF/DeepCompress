@@ -34,18 +34,25 @@ def partition_point_cloud(points, block_size, min_points):
     Returns:
         list: A list of blocks, where each block is a Tensor of points.
     """
-    # Compute bounds and grid indices
+    # Compute grid bounds
     min_bound = tf.reduce_min(points, axis=0)
-    indices = tf.cast((points - min_bound) / block_size, tf.int32)
+    grid_indices = tf.cast(tf.math.floor((points - min_bound) / block_size), tf.int32)
+
+    # Combine indices into unique keys
+    unique_indices, idx = tf.unique(
+        grid_indices[:, 0] * 1000000 +
+        grid_indices[:, 1] * 1000 +
+        grid_indices[:, 2]
+    )
 
     # Group points into blocks
-    unique_indices, idx = tf.unique(indices[:, 0] * 10000 + indices[:, 1] * 100 + indices[:, 2])
     blocks = []
     for unique_idx in unique_indices:
         mask = idx == unique_idx
         block = tf.boolean_mask(points, mask)
         if tf.shape(block)[0] >= min_points:
             blocks.append(block)
+
     return blocks
 
 def save_blocks(blocks, output_dir, base_name):
