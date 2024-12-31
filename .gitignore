@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python-specific
 __pycache__/
 *.pyc
@@ -16,3 +17,18 @@ Thumbs.db
 
 # Log files
 *.log
+=======
+# Ignore all shell scripts
+*.sh
+
+# Ignore the /env directory
+/env/
+
+# Ignore the /myutils directory
+/myutils/
+
+# Ignore macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+>>>>>>> e9a168e1b (Add .gitignore to exclude shell scripts, /env, /myutils, and macOS system files)
