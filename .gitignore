@@ -4,3 +4,5 @@ env/
 *.so
 __pycache__/
 *.pyc
+/myutils/
+/DeepCompress/
