@@ -1,126 +1,196 @@
+import tensorflow as tf
 import json
 import os
+from typing import Dict, Any, List
+from pathlib import Path
+from dataclasses import dataclass
+import logging
 
-def generate_report(experiment_results, output_file):
-    """
-    Generate a detailed report from the experiment results.
+@dataclass
+class ExperimentMetrics:
+    """Container for experiment metrics."""
+    psnr: float
+    bd_rate: float
+    bitrate: float
+    compression_ratio: float
+    compression_time: float
+    decompression_time: float
 
-    Args:
-        experiment_results (dict): Dictionary containing the results of the experiment.
-        output_file (str): Path to save the generated report.
-
-    Returns:
-        None
-    """
-    report = {}
-
-    # Add experiment metadata (parameters, timestamp, etc.)
-    report['experiment_metadata'] = {
-        "octree_levels": experiment_results.get('octree_levels', 'N/A'),
-        "quantization_levels": experiment_results.get('quantization_levels', 'N/A'),
-        "num_files": len(experiment_results),
-        "timestamp": experiment_results.get('timestamp', 'N/A')
-    }
-
-    # Track model performance
-    model_performance = []
-    best_overall = {
-        'psnr': float('-inf'),
-        'bd_rate': float('inf'),
-        'bitrate': float('inf'),
-        'compression_ratio': float('inf'),
-        'compression_time': float('inf'),
-        'decompression_time': float('inf')
-    }
-
-    best_per_model = {}
-
-    for file, results in experiment_results.items():
-        if file == 'timestamp' or file == 'octree_levels' or file == 'quantization_levels':
-            continue  # Skip metadata entries
+class ExperimentReporter:
+    """Reporter for compression experiments."""
+    
+    def __init__(self, experiment_results: Dict[str, Any]):
+        self.experiment_results = experiment_results
+        self.summary = self._initialize_summary()
+        self.logger = logging.getLogger(__name__)
         
-        # Collect model performance data
-        model_data = {
-            "file": file,
-            "psnr": results.get('psnr', None),
-            "bd_rate": results.get('bd_rate', None),
-            "bitrate": results.get('bitrate', None),
-            "compression_ratio": results.get('compression_ratio', None),
-            "compression_time": results.get('compression_time', None),
-            "decompression_time": results.get('decompression_time', None)
+    def _initialize_summary(self) -> Dict[str, Any]:
+        """Initialize summary metrics."""
+        return {
+            'experiment_metadata': {
+                'octree_levels': self.experiment_results.get('octree_levels', 'N/A'),
+                'quantization_levels': self.experiment_results.get('quantization_levels', 'N/A'),
+                'num_files': len(self.experiment_results),
+                'timestamp': self.experiment_results.get('timestamp', 'N/A')
+            }
         }
-        model_performance.append(model_data)
+        
+    @tf.function
+    def compute_aggregate_metrics(self) -> Dict[str, tf.Tensor]:
+        """Compute aggregate metrics using TensorFlow operations."""
+        metrics = []
+        
+        for file_name, results in self.experiment_results.items():
+            if file_name in ['timestamp', 'octree_levels', 'quantization_levels']:
+                continue
+                
+            if all(key in results for key in ['psnr', 'bd_rate', 'bitrate']):
+                metrics.append([
+                    results['psnr'],
+                    results['bd_rate'],
+                    results['bitrate']
+                ])
+        
+        if not metrics:
+            return {}
+            
+        metrics_tensor = tf.convert_to_tensor(metrics, dtype=tf.float32)
+        
+        return {
+            'avg_psnr': tf.reduce_mean(metrics_tensor[:, 0]),
+            'avg_bd_rate': tf.reduce_mean(metrics_tensor[:, 1]),
+            'avg_bitrate': tf.reduce_mean(metrics_tensor[:, 2])
+        }
+        
+    def _compute_best_metrics(self) -> Dict[str, Any]:
+        """Compute best metrics across all experiments."""
+        best_metrics = {
+            'psnr': float('-inf'),
+            'bd_rate': float('inf'),
+            'bitrate': float('inf'),
+            'compression_ratio': float('inf'),
+            'compression_time': float('inf'),
+            'decompression_time': float('inf')
+        }
+        
+        best_models = {
+            'psnr': None,
+            'bd_rate': None,
+            'bitrate': None,
+            'compression_ratio': None,
+            'compression_time': None,
+            'decompression_time': None
+        }
+        
+        for file_name, results in self.experiment_results.items():
+            if file_name in ['timestamp', 'octree_levels', 'quantization_levels']:
+                continue
+                
+            # Update best metrics
+            for metric in best_metrics.keys():
+                if metric in results:
+                    value = results[metric]
+                    if metric == 'psnr':  # Higher is better
+                        if value > best_metrics[metric]:
+                            best_metrics[metric] = value
+                            best_models[metric] = file_name
+                    else:  # Lower is better
+                        if value < best_metrics[metric]:
+                            best_metrics[metric] = value
+                            best_models[metric] = file_name
+        
+        return {
+            'metrics': best_metrics,
+            'models': best_models
+        }
 
-        # Track best performance across all metrics
-        if results.get('psnr', float('-inf')) > best_overall['psnr']:
-            best_overall['psnr'] = results.get('psnr')
-            best_per_model['psnr'] = file
-        if results.get('bd_rate', float('inf')) < best_overall['bd_rate']:
-            best_overall['bd_rate'] = results.get('bd_rate')
-            best_per_model['bd_rate'] = file
-        if results.get('bitrate', float('inf')) < best_overall['bitrate']:
-            best_overall['bitrate'] = results.get('bitrate')
-            best_per_model['bitrate'] = file
-        if results.get('compression_ratio', float('inf')) < best_overall['compression_ratio']:
-            best_overall['compression_ratio'] = results.get('compression_ratio')
-            best_per_model['compression_ratio'] = file
-        if results.get('compression_time', float('inf')) < best_overall['compression_time']:
-            best_overall['compression_time'] = results.get('compression_time')
-            best_per_model['compression_time'] = file
-        if results.get('decompression_time', float('inf')) < best_overall['decompression_time']:
-            best_overall['decompression_time'] = results.get('decompression_time')
-            best_per_model['decompression_time'] = file
+    def generate_report(self) -> Dict[str, Any]:
+        """Generate comprehensive report of experiment results."""
+        # Compute aggregate metrics
+        aggregate_metrics = self.compute_aggregate_metrics()
+        
+        # Get best performance metrics
+        best_performance = self._compute_best_metrics()
+        
+        # Compile model performance data
+        model_performance = []
+        for file_name, results in self.experiment_results.items():
+            if file_name in ['timestamp', 'octree_levels', 'quantization_levels']:
+                continue
+                
+            model_data = {
+                'file': file_name,
+                'metrics': {
+                    metric: results.get(metric, None)
+                    for metric in [
+                        'psnr', 'bd_rate', 'bitrate',
+                        'compression_ratio', 'compression_time',
+                        'decompression_time'
+                    ]
+                }
+            }
+            model_performance.append(model_data)
 
-    report['model_performance'] = model_performance
+        report = {
+            'metadata': self.summary['experiment_metadata'],
+            'aggregate_metrics': {
+                k: float(v.numpy()) if isinstance(v, tf.Tensor) else v
+                for k, v in aggregate_metrics.items()
+            },
+            'best_performance': best_performance,
+            'model_performance': model_performance
+        }
+        
+        return report
 
-    # Add the overall best performance across all metrics
-    report['best_performance'] = {
-        "best_psnr": best_per_model['psnr'],
-        "best_bd_rate": best_per_model['bd_rate'],
-        "best_bitrate": best_per_model['bitrate'],
-        "best_compression_ratio": best_per_model['compression_ratio'],
-        "best_compression_time": best_per_model['compression_time'],
-        "best_decompression_time": best_per_model['decompression_time']
-    }
+    def save_report(self, output_file: str):
+        """Save the generated report to a file."""
+        report = self.generate_report()
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'w') as f:
+            json.dump(report, f, indent=4)
+            
+        self.logger.info(f"Report saved to {output_file}")
 
-    # Compute aggregate statistics (best model, average performance, etc.)
-    avg_psnr = sum([res['psnr'] for res in model_performance if res['psnr'] is not None]) / len(model_performance)
-    avg_bd_rate = sum([res['bd_rate'] for res in model_performance if res['bd_rate'] is not None]) / len(model_performance)
-
-    report['aggregate_statistics'] = {
-        "avg_psnr": avg_psnr,
-        "avg_bd_rate": avg_bd_rate
-    }
-
-    # Save the report to a file
-    with open(output_file, 'w') as f:
-        json.dump(report, f, indent=4)
-
-    print(f"Report saved to {output_file}")
-
-def load_experiment_results(input_file):
-    """
-    Load the experiment results from a JSON file.
-
-    Args:
-        input_file (str): Path to the JSON file containing experiment results.
-
-    Returns:
-        dict: Experiment results as a dictionary.
-    """
+def load_experiment_results(input_file: str) -> Dict[str, Any]:
+    """Load experiment results from a JSON file."""
     with open(input_file, 'r') as f:
         return json.load(f)
 
 def main():
-    # Example usage (assuming the experiment results are saved in a JSON file)
-    input_file = 'experiment_results.json'  # This file would be generated by mp_run.py
-    output_file = 'experiment_report.json'  # This will be the generated report
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
     
-    # Load the experiment results from a JSON file
-    experiment_results = load_experiment_results(input_file)
+    # Parse arguments
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate experiment report")
+    parser.add_argument(
+        "input_file",
+        type=str,
+        help="Path to experiment results JSON file"
+    )
+    parser.add_argument(
+        "output_file",
+        type=str,
+        help="Path to save the generated report"
+    )
+    args = parser.parse_args()
     
-    # Generate the detailed report
-    generate_report(experiment_results, output_file)
+    try:
+        # Load results and generate report
+        results = load_experiment_results(args.input_file)
+        reporter = ExperimentReporter(results)
+        reporter.save_report(args.output_file)
+        
+    except Exception as e:
+        logger.error(f"Error generating report: {str(e)}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     main()

@@ -1,17 +1,6 @@
-# Ignore virtual environments
-/env/
-
-# Ignore other potentially large or unnecessary files
-*.pyc
+# Virtual Environment
+env/
+*.dylib
+*.so
 __pycache__/
-*.log
-
-# Ignore shell scripts
-*.sh
-
-# Ignore macOS system files
-.DS_Store
-
-# Ignore utility folders
-myutils/
-MyUtils/
+*.pyc
