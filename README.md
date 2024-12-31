@@ -21,7 +21,7 @@ Point clouds are a basic data type of growing interest due to their use in appli
 ### 1. Environment Setup
 ```bash
 # Clone repository
-git clone https://github.com/ericsson/deepcompress.git
+git clone https://github.com/pmclsf/deepcompress.git
 cd deepcompress
 
 # Create and activate virtual environment
