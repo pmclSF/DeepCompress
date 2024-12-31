@@ -5,3 +5,6 @@
 *.pyc
 __pycache__/
 *.log
+
+# Ignore shell scripts
+*.sh
