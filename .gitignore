@@ -8,3 +8,10 @@ __pycache__/
 
 # Ignore shell scripts
 *.sh
+
+# Ignore macOS system files
+.DS_Store
+
+# Ignore utility folders
+myutils/
+MyUtils/
