@@ -1,17 +1,18 @@
-# Ignore virtual environments
-/env/
-
-# Ignore other potentially large or unnecessary files
-*.pyc
+# Python-specific
 __pycache__/
-*.log
+*.pyc
+*.pyo
 
-# Ignore shell scripts
-*.sh
+# Environment folders
+env/
+.venv/
 
-# Ignore macOS system files
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# System-specific
 .DS_Store
+Thumbs.db
 
-# Ignore utility folders
-myutils/
-MyUtils/
+# Log files
+*.log
