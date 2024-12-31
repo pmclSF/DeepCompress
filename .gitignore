@@ -36,3 +36,6 @@ Thumbs.db
 =======
 .DS_Store
 >>>>>>> 997bad11c (Add .DS_Store to .gitignore)
+env/
+/env/lib/python3.8/site-packages/open3d/cpu/pybind.cpython-38-darwin.so
+/env/lib/python3.8/site-packages/tensorflow/libtensorflow_cc.2.dylib
