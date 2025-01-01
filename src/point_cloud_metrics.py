@@ -5,10 +5,7 @@ from typing import Tuple, Optional, Dict
 
 @njit(parallel=True)
 def compute_point_to_point_distances(points1: np.ndarray, 
-                                     points2: np.ndarray) -> np.ndarray:
-    """
-    Compute point-to-point distances using parallel Numba optimization.
-    """
+                                   points2: np.ndarray) -> np.ndarray:
     N = points1.shape[0]
     M = points2.shape[0]
     distances = np.empty(N, dtype=np.float32)
@@ -25,11 +22,8 @@ def compute_point_to_point_distances(points1: np.ndarray,
 
 @njit(parallel=True)
 def compute_point_to_normal_distances(points1: np.ndarray, 
-                                      points2: np.ndarray,
-                                      normals2: np.ndarray) -> np.ndarray:
-    """
-    Compute point-to-plane distances using parallel Numba optimization.
-    """
+                                    points2: np.ndarray,
+                                    normals2: np.ndarray) -> np.ndarray:
     N = points1.shape[0]
     M = points2.shape[0]
     distances = np.empty(N, dtype=np.float32)
@@ -46,13 +40,10 @@ def compute_point_to_normal_distances(points1: np.ndarray,
     return distances
 
 def calculate_metrics(predicted: np.ndarray, 
-                      ground_truth: np.ndarray,
-                      predicted_normals: Optional[np.ndarray] = None,
-                      ground_truth_normals: Optional[np.ndarray] = None,
-                      use_kdtree: bool = True) -> Dict[str, float]:
-    """
-    Calculate comprehensive metrics between predicted and ground truth point clouds.
-    """
+                     ground_truth: np.ndarray,
+                     predicted_normals: Optional[np.ndarray] = None,
+                     ground_truth_normals: Optional[np.ndarray] = None,
+                     use_kdtree: bool = True) -> Dict[str, float]:
     if predicted.size == 0 or ground_truth.size == 0:
         raise ValueError("Empty point cloud provided")
     if predicted.shape[1] != 3 or ground_truth.shape[1] != 3:
@@ -94,38 +85,9 @@ def calculate_metrics(predicted: np.ndarray,
     return metrics
 
 def calculate_chamfer_distance(predicted: np.ndarray, target: np.ndarray) -> float:
-    """
-    Wrapper to calculate only the Chamfer Distance using calculate_metrics.
-    """
     metrics = calculate_metrics(predicted, target)
     return metrics["chamfer"]
 
 def calculate_d1_metric(predicted: np.ndarray, target: np.ndarray) -> float:
-    """
-    Wrapper to calculate only the D1 Metric using calculate_metrics.
-    """
     metrics = calculate_metrics(predicted, target)
     return metrics["d1"]
-
-if __name__ == "__main__":
-    N, M = 1000, 1200
-    predicted_pc = np.random.rand(N, 3).astype(np.float32)
-    ground_truth_pc = np.random.rand(M, 3).astype(np.float32)
-    
-    predicted_normals = np.random.randn(N, 3).astype(np.float32)
-    predicted_normals /= np.linalg.norm(predicted_normals, axis=1, keepdims=True)
-    
-    ground_truth_normals = np.random.randn(M, 3).astype(np.float32)
-    ground_truth_normals /= np.linalg.norm(ground_truth_normals, axis=1, keepdims=True)
-    
-    metrics_kdtree = calculate_metrics(
-        predicted_pc, 
-        ground_truth_pc,
-        predicted_normals,
-        ground_truth_normals,
-        use_kdtree=True
-    )
-    
-    print("\nMetrics using KD-tree:")
-    for metric, value in metrics_kdtree.items():
-        print(f"{metric}: {value:.6f}")

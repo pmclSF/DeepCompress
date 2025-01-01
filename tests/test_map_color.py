@@ -1,9 +1,17 @@
 import unittest
-import numpy as np
 import os
-from map_color import load_point_cloud, load_colors, transfer_colors, save_colored_point_cloud
+import numpy as np
+
+# Local
+from map_color import (
+    load_point_cloud, 
+    load_colors, 
+    transfer_colors, 
+    save_colored_point_cloud
+)
 
 class TestMapColor(unittest.TestCase):
+    """Test suite for point cloud color mapping operations."""
 
     def setUp(self):
         """Set up temporary test data."""

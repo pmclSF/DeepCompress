@@ -1,17 +1,18 @@
+# Standard library
 import sys
 import os
+
+# Third party
 import pytest
 import numpy as np
 import matplotlib.pyplot as plt
-from pathlib import Path
-import json
 
-# Add src directory to Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-
+# Local
 from colorbar import get_colorbar, ColorbarGenerator, ColorbarConfig
 
 class TestColorbar:
+    """Test suite for colorbar generation and color mapping functionality."""
+    
     def setup_method(self):
         """Setup for each test method."""
         self.vmin = 0

@@ -1,82 +1,164 @@
 import tensorflow as tf
-import os
-from ds_pc_octree_blocks import read_point_cloud, partition_point_cloud, save_blocks
+import pytest
+from pathlib import Path
+from test_utils import (
+    create_mock_point_cloud,
+    create_mock_ply_file,
+    setup_test_files
+)
+from ds_pc_octree_blocks import (
+    read_point_cloud,
+    partition_point_cloud,
+    save_blocks
+)
 
-def test_read_point_cloud(tmp_path):
-    """Test reading a point cloud from a .ply file."""
-    # Create a sample .ply file
-    ply_file = tmp_path / "test.ply"
-    with open(ply_file, "w") as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("element vertex 5\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("end_header\n")
-        f.write("0.0 0.0 0.0\n")
-        f.write("1.0 1.0 1.0\n")
-        f.write("2.0 2.0 2.0\n")
-        f.write("3.0 3.0 3.0\n")
-        f.write("4.0 4.0 4.0\n")
+class TestPointCloudOctreeBlocks(tf.test.TestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        """Set up test environment."""
+        self.test_files = setup_test_files(tmp_path)
+        self.point_cloud = create_mock_point_cloud(1000)
 
-    # Read the point cloud
-    points = read_point_cloud(str(ply_file))
-    assert points.shape == (5, 3), "Point cloud shape mismatch"
-    assert tf.reduce_all(tf.equal(points, tf.constant([
-        [0.0, 0.0, 0.0],
-        [1.0, 1.0, 1.0],
-        [2.0, 2.0, 2.0],
-        [3.0, 3.0, 3.0],
-        [4.0, 4.0, 4.0],
-    ]))), "Point cloud content mismatch"
+    @tf.function
+    def test_read_point_cloud(self):
+        """Test reading point cloud with TF operations."""
+        points = read_point_cloud(str(self.test_files['point_cloud']))
+        
+        self.assertIsInstance(points, tf.Tensor)
+        self.assertEqual(points.shape[1], 3)
+        self.assertEqual(points.dtype, tf.float32)
 
-def test_partition_point_cloud():
-    """Test partitioning a point cloud into blocks."""
-    points = tf.constant([
-        [0.0, 0.0, 0.0],
-        [1.0, 1.0, 1.0],
-        [2.0, 2.0, 2.0],
-        [3.0, 3.0, 3.0],
-        [4.0, 4.0, 4.0],
-    ], dtype=tf.float32)
+    @tf.function
+    def test_partition_point_cloud(self):
+        """Test point cloud partitioning with TF operations."""
+        # Test partitioning
+        blocks = partition_point_cloud(
+            self.point_cloud,
+            block_size=0.5,
+            min_points=50
+        )
+        
+        # Verify blocks
+        total_points = 0
+        for block in blocks:
+            # Check dimensionality
+            self.assertEqual(block.shape[1], 3)
+            
+            # Check minimum points constraint
+            self.assertGreaterEqual(block.shape[0], 50)
+            
+            # Verify points are within block bounds
+            block_min = tf.reduce_min(block, axis=0)
+            block_max = tf.reduce_max(block, axis=0)
+            block_size = block_max - block_min
+            
+            # Check block size constraint
+            self.assertTrue(tf.reduce_all(block_size <= 0.5))
+            
+            total_points += block.shape[0]
+        
+        # Verify all points are accounted for
+        self.assertEqual(total_points, self.point_cloud.shape[0])
 
-    # Partition the point cloud
-    blocks = partition_point_cloud(points, block_size=2.0, min_points=1)
+    def test_save_blocks(self):
+        """Test saving blocks to PLY files."""
+        blocks = partition_point_cloud(
+            self.point_cloud,
+            block_size=0.5,
+            min_points=50
+        )
+        
+        # Save blocks
+        output_dir = self.test_files['blocks']
+        output_dir.mkdir(exist_ok=True)
+        
+        save_blocks(blocks, str(output_dir), "test")
+        
+        # Verify saved files
+        saved_files = list(output_dir.glob("test_block_*.ply"))
+        self.assertEqual(len(saved_files), len(blocks))
+        
+        # Verify file contents
+        for i, file_path in enumerate(sorted(saved_files)):
+            loaded_points = read_point_cloud(str(file_path))
+            self.assertAllEqual(loaded_points.shape, blocks[i].shape)
+            self.assertAllClose(loaded_points, blocks[i])
 
-    # Verify the blocks
-    assert len(blocks) == 3, "Number of blocks mismatch"
-    assert tf.reduce_all(tf.equal(blocks[0], tf.constant([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]))), "Block 0 mismatch"
-    assert tf.reduce_all(tf.equal(blocks[1], tf.constant([[2.0, 2.0, 2.0], [3.0, 3.0, 3.0]]))), "Block 1 mismatch"
-    assert tf.reduce_all(tf.equal(blocks[2], tf.constant([[4.0, 4.0, 4.0]]))), "Block 2 mismatch"
+    @tf.function
+    def test_batch_processing(self):
+        """Test batch processing capabilities."""
+        # Create batch of point clouds
+        batch_size = 4
+        point_clouds = tf.stack([self.point_cloud] * batch_size)
+        
+        # Process batch
+        blocks_batch = tf.vectorized_map(
+            lambda x: partition_point_cloud(x, block_size=0.5, min_points=50),
+            point_clouds
+        )
+        
+        # Verify batch results
+        self.assertEqual(len(blocks_batch), batch_size)
+        for blocks in blocks_batch:
+            total_points = tf.reduce_sum([tf.shape(block)[0] for block in blocks])
+            self.assertEqual(total_points, tf.shape(self.point_cloud)[0])
 
-def test_save_blocks(tmp_path):
-    """Test saving blocks to .ply files."""
-    blocks = [
-        tf.constant([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=tf.float32),
-        tf.constant([[2.0, 2.0, 2.0]], dtype=tf.float32),
-    ]
+    @pytest.mark.integration
+    def test_full_pipeline(self):
+        """Test complete octree processing pipeline."""
+        # Create test point cloud
+        input_file = self.test_files['point_cloud']
+        output_dir = self.test_files['blocks']
+        
+        # Read point cloud
+        points = read_point_cloud(str(input_file))
+        
+        # Partition into blocks
+        blocks = partition_point_cloud(points, block_size=0.5, min_points=50)
+        
+        # Save blocks
+        save_blocks(blocks, str(output_dir), "test")
+        
+        # Verify results
+        saved_files = list(output_dir.glob("test_block_*.ply"))
+        
+        # Test reconstruction
+        reconstructed_points = []
+        for file_path in saved_files:
+            block_points = read_point_cloud(str(file_path))
+            reconstructed_points.append(block_points)
+        
+        reconstructed = tf.concat(reconstructed_points, axis=0)
+        
+        # Verify point count
+        self.assertEqual(reconstructed.shape[0], points.shape[0])
+        
+        # Verify point distribution
+        original_bounds = (tf.reduce_min(points, axis=0), tf.reduce_max(points, axis=0))
+        reconstructed_bounds = (tf.reduce_min(reconstructed, axis=0), tf.reduce_max(reconstructed, axis=0))
+        
+        self.assertAllClose(original_bounds[0], reconstructed_bounds[0], rtol=1e-5)
+        self.assertAllClose(original_bounds[1], reconstructed_bounds[1], rtol=1e-5)
 
-    # Save blocks
-    save_blocks(blocks, str(tmp_path), "test")
-
-    # Verify output files
-    block_files = sorted(tmp_path.glob("test_block_*.ply"))
-    assert len(block_files) == 2, "Number of saved blocks mismatch"
-
-    # Verify contents of block files
-    for i, block_file in enumerate(block_files):
-        with open(block_file, "r") as f:
-            lines = f.readlines()
-            header_end = lines.index("end_header\n")
-            points = [
-                list(map(float, line.strip().split())) for line in lines[header_end + 1 :]
-            ]
-            assert len(points) == blocks[i].shape[0], f"Block {i} point count mismatch"
-            assert tf.reduce_all(tf.equal(tf.constant(points, dtype=tf.float32), blocks[i])), f"Block {i} content mismatch"
+    def test_error_handling(self):
+        """Test error handling in octree processing."""
+        # Test empty point cloud
+        empty_cloud = tf.zeros((0, 3), dtype=tf.float32)
+        blocks = partition_point_cloud(empty_cloud, block_size=0.5, min_points=50)
+        self.assertEqual(len(blocks), 0)
+        
+        # Test single point
+        single_point = tf.constant([[0.0, 0.0, 0.0]], dtype=tf.float32)
+        blocks = partition_point_cloud(single_point, block_size=0.5, min_points=1)
+        self.assertEqual(len(blocks), 1)
+        
+        # Test invalid block size
+        with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "Block size must be positive"):
+            partition_point_cloud(self.point_cloud, block_size=-1.0, min_points=50)
+        
+        # Test invalid minimum points
+        with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "Minimum points must be positive"):
+            partition_point_cloud(self.point_cloud, block_size=0.5, min_points=0)
 
 if __name__ == "__main__":
-    test_read_point_cloud("/tmp")
-    test_partition_point_cloud()
-    test_save_blocks("/tmp")
-    print("All tests passed!")
+    tf.test.main()
