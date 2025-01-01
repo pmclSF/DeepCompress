@@ -281,3 +281,15 @@ Key components:
   - `test_colorbar.py`: Visualization tests
   - `test_map_color.py`: Color mapping tests
   - `test_utils.py`: Common test utilities
+
+## Citation
+
+If you use this codebase in your research, please cite our paper:
+
+```bibtex
+@article{killea2021deepcompress,
+  title={DeepCompress: Efficient Point Cloud Geometry Compression},
+  author={Killea, Ryan and Li, Yun and Bastani, Saeed and McLachlan, Paul},
+  journal={arXiv preprint arXiv:2106.01504},
+  year={2021}
+}
