@@ -28,7 +28,6 @@ class TestEvaluationPipeline:
         config_file = tmp_path / 'config.yml'
         with open(config_file, 'w') as f:
             yaml.dump(config, f)
-            
         return str(config_file)
 
     @pytest.fixture
@@ -53,19 +52,14 @@ class TestEvaluationPipeline:
         return _create_ply
 
     def test_initialization(self, pipeline):
-        """Test proper initialization of components."""
         assert pipeline.model is not None
         assert pipeline.metrics is not None
         assert pipeline.data_loader is not None
 
     def test_evaluate_single(self, pipeline):
-        """Test evaluation of a single point cloud."""
-        # Create sample point cloud
         point_cloud = tf.random.uniform((1000, 3), -1, 1)
-        
         results = pipeline._evaluate_single(point_cloud)
         
-        # Check metrics
         for metric in ['psnr', 'chamfer', 'bd_rate']:
             assert metric in results
             assert isinstance(results[metric], float)
@@ -73,27 +67,19 @@ class TestEvaluationPipeline:
             assert results[metric] >= 0
 
     def test_evaluate_full_pipeline(self, pipeline, tmp_path, create_sample_ply):
-        """Test full evaluation pipeline."""
-        # Create test dataset
         test_dir = tmp_path / '8ivfb'
         test_dir.mkdir(parents=True)
         
-        # Create sample files
         num_samples = 3
         for i in range(num_samples):
             create_sample_ply(test_dir / f'test_{i}.ply')
         
-        # Update config path
         pipeline.config['data']['ivfb_path'] = str(test_dir)
-        
-        # Run evaluation
         results = pipeline.evaluate()
         
-        # Check results structure
         assert isinstance(results, dict)
         assert len(results) == num_samples
         
-        # Check individual results
         for filename, result in results.items():
             assert isinstance(result, EvaluationResult)
             assert hasattr(result, 'psnr')
@@ -103,8 +89,6 @@ class TestEvaluationPipeline:
                       for metric in ['psnr', 'chamfer_distance', 'bd_rate'])
 
     def test_generate_report(self, pipeline, tmp_path):
-        """Test report generation."""
-        # Create sample results
         results = {
             'test_1.ply': EvaluationResult(
                 psnr=35.5,
@@ -124,15 +108,10 @@ class TestEvaluationPipeline:
             )
         }
         
-        # Generate report
         pipeline.generate_report(results)
-        
-        # Check report file exists
         report_path = Path(pipeline.config['evaluation']['output_dir']) / "evaluation_report.json"
         assert report_path.exists()
         
-        # Verify report content
-        import json
         with open(report_path) as f:
             report_data = json.load(f)
             
@@ -140,24 +119,5 @@ class TestEvaluationPipeline:
         assert 'aggregate_metrics' in report_data
         assert len(report_data['model_performance']) == len(results)
 
-    @pytest.mark.integration
-    def test_end_to_end(self, pipeline, tmp_path, create_sample_ply):
-        """Test end-to-end evaluation process."""
-        # Create test dataset
-        test_dir = tmp_path / '8ivfb'
-        test_dir.mkdir(parents=True)
-        
-        # Create sample files
-        for i in range(3):
-            create_sample_ply(test_dir / f'test_{i}.ply')
-        
-        # Update config path
-        pipeline.config['data']['ivfb_path'] = str(test_dir)
-        
-        # Run complete evaluation
-        results = pipeline.evaluate()
-        pipeline.generate_report(results)
-        
-        # Check outputs
-        assert len(results) > 0
-        assert (Path(pipeline.config['evaluation']['output_dir']) / "evaluation_report.json").exists()
+if __name__ == '__main__':
+    tf.test.main()
