@@ -21,7 +21,7 @@ Point clouds are a basic data type of growing interest due to their use in appli
 ### 1. Environment Setup
 ```bash
 # Clone repository
-git clone https://github.com/ericsson/deepcompress.git
+git clone https://github.com/pmclsf/deepcompress.git
 cd deepcompress
 
 # Create and activate virtual environment
@@ -242,25 +242,54 @@ Key components:
   - `decompress_octree.py`: Point cloud decompression
   - `ds_mesh_to_pc.py`: Mesh to point cloud conversion
   - `ds_pc_octree_blocks.py`: Octree block partitioning
-  - `ds_select_largest.py`: Large point cloud selection
-
-- **Evaluation & Comparison**
-  - `ev_compare.py`: Results comparison
-  - `ev_experiment.yml`: Experiment configuration
-  - `ev_run_experiment.py`: Experiment execution
-  - `ev_run_render.py`: Point cloud rendering
-  - `experiment.py`: Core experiment utilities
 
 - **Model Components**
-  - `model_opt.py`: Model optimization
+  - `entropy_model.py`: Entropy modeling and compression
   - `model_transforms.py`: Model transformations
-  - `patch_gaussian_conditional.py`: Gaussian conditional debugging
-  - `pc_metric.py`: Point cloud metrics
+  - `point_cloud_metrics.py`: Point cloud metrics computation
+
+- **Training & Evaluation**
+  - `cli_train.py`: Command-line training interface
+  - `training_pipeline.py`: Training pipeline
+  - `evaluation_pipeline.py`: Evaluation pipeline
+  - `experiment.py`: Core experiment utilities
 
 - **Support Utilities**
   - `colorbar.py`: Visualization colorbars
   - `map_color.py`: Color mapping
-  - `mp_report.py`, `mp_run.py`: MPEG-related utilities
   - `octree_coding.py`: Octree encoding
   - `parallel_process.py`: Parallel processing
-  - `tr_train.py`: Model training
+
+### Test Structure (`/tests`)
+
+- **Core Tests**
+  - `test_entropy_model.py`: Entropy model tests
+  - `test_model_transforms.py`: Model transformation tests
+  - `test_point_cloud_metrics.py`: Metrics computation tests
+
+- **Pipeline Tests**
+  - `test_training_pipeline.py`: Training pipeline tests
+  - `test_evaluation_pipeline.py`: Evaluation pipeline tests
+  - `test_experiment.py`: Experiment utility tests
+  - `test_integration.py`: End-to-end integration tests
+
+- **Data Processing Tests**
+  - `test_ds_mesh_to_pc.py`: Mesh conversion tests
+  - `test_ds_pc_octree_blocks.py`: Octree block tests
+
+- **Utility Tests**
+  - `test_colorbar.py`: Visualization tests
+  - `test_map_color.py`: Color mapping tests
+  - `test_utils.py`: Common test utilities
+
+## Citation
+
+If you use this codebase in your research, please cite our paper:
+
+```bibtex
+@article{killea2021deepcompress,
+  title={DeepCompress: Efficient Point Cloud Geometry Compression},
+  author={Killea, Ryan and Li, Yun and Bastani, Saeed and McLachlan, Paul},
+  journal={arXiv preprint arXiv:2106.01504},
+  year={2021}
+}
