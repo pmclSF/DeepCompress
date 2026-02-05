@@ -8,3 +8,4 @@ pyyaml~=5.1.2
 pytest~=7.1.0
 scipy~=1.8.1
 numba~=0.55.0
+tensorflow-probability>=0.19.0
