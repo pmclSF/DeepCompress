@@ -86,14 +86,15 @@ class TestChannelContext(tf.test.TestCase):
         channels_per_group = self.channels // self.num_groups
 
         # Get context for group 1 (uses only group 0)
-        mean1, scale1 = self.layer(self.y_hat, 1)
+        # Note: use .call() to pass non-tensor group_idx as keyword argument
+        mean1, scale1 = self.layer.call(self.y_hat, group_idx=1)
 
         # Modify groups 2 and 3 (should not affect group 1's context)
         y_hat_modified = self.y_hat.numpy()
         y_hat_modified[..., 2 * channels_per_group:] = 999.0
         y_hat_modified = tf.constant(y_hat_modified)
 
-        mean1_mod, scale1_mod = self.layer(y_hat_modified, 1)
+        mean1_mod, scale1_mod = self.layer.call(y_hat_modified, group_idx=1)
 
         # Context for group 1 should be unchanged
         self.assertAllClose(mean1, mean1_mod)
@@ -101,7 +102,8 @@ class TestChannelContext(tf.test.TestCase):
 
     def test_channel_context_first_group_no_context(self):
         """First group returns zero context."""
-        mean, scale = self.layer(self.y_hat, 0)
+        # Note: use .call() to pass non-tensor group_idx as keyword argument
+        mean, scale = self.layer.call(self.y_hat, group_idx=0)
 
         # All values should be zero for first group
         self.assertAllClose(mean, tf.zeros_like(mean))
@@ -112,7 +114,8 @@ class TestChannelContext(tf.test.TestCase):
         channels_per_group = self.channels // self.num_groups
 
         for i in range(self.num_groups):
-            mean, scale = self.layer(self.y_hat, i)
+            # Note: use .call() to pass non-tensor group_idx as keyword argument
+            mean, scale = self.layer.call(self.y_hat, group_idx=i)
 
             expected_shape = (
                 self.batch_size, self.spatial_size, self.spatial_size,
@@ -125,7 +128,8 @@ class TestChannelContext(tf.test.TestCase):
     def test_channel_context_scale_positive(self):
         """Scale from context is always positive (except first group)."""
         for i in range(1, self.num_groups):
-            mean, scale = self.layer(self.y_hat, i)
+            # Note: use .call() to pass non-tensor group_idx as keyword argument
+            mean, scale = self.layer.call(self.y_hat, group_idx=i)
             self.assertAllGreaterEqual(scale, 0.01)
 
     def test_channel_context_invalid_groups(self):
