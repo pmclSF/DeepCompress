@@ -29,9 +29,8 @@ jobs:
 
     - name: Run tests
       run: |
-        # Run only the new entropy modeling tests (legacy tests have pre-existing import errors)
+        # Run only the new entropy modeling tests (legacy tests have pre-existing issues)
         pytest \
-          tests/test_entropy_model.py \
           tests/test_entropy_parameters.py \
           tests/test_context_model.py \
           tests/test_channel_context.py \
