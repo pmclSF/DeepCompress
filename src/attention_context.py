@@ -8,8 +8,7 @@ better distribution parameter prediction.
 """
 
 import tensorflow as tf
-import numpy as np
-from typing import Tuple, Optional, Dict, Any, List
+from typing import Tuple, Optional, Dict, Any
 
 
 class SparseAttention3D(tf.keras.layers.Layer):

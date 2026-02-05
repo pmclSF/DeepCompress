@@ -8,7 +8,6 @@ maintaining autoregressive structure across groups.
 """
 
 import tensorflow as tf
-import numpy as np
 from typing import Tuple, Optional, Dict, Any, List
 
 

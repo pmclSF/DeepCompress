@@ -1,6 +1,7 @@
 import tensorflow as tf
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Tuple
 from dataclasses import dataclass
+
 
 @dataclass
 class TransformConfig:
@@ -11,13 +12,14 @@ class TransformConfig:
     activation: str = 'cenic_gdn'
     conv_type: str = 'separable'
 
+
 class CENICGDN(tf.keras.layers.Layer):
     """CENIC-GDN activation function implementation."""
-    
+
     def __init__(self, channels: int, **kwargs):
         super().__init__(**kwargs)
         self.channels = channels
-        
+
     def build(self, input_shape):
         self.beta = self.add_weight(
             name='beta',
@@ -32,7 +34,7 @@ class CENICGDN(tf.keras.layers.Layer):
             trainable=True
         )
         super().build(input_shape)
-        
+
     @tf.function
     def call(self, x):
         norm = tf.abs(x)
@@ -48,11 +50,12 @@ class CENICGDN(tf.keras.layers.Layer):
         })
         return config
 
+
 class SpatialSeparableConv(tf.keras.layers.Layer):
     """1+2D spatially separable convolution implementation."""
-    
-    def __init__(self, 
-                 filters: int, 
+
+    def __init__(self,
+                 filters: int,
                  kernel_size: Tuple[int, int, int] = (3, 3, 3),
                  strides: Tuple[int, int, int] = (1, 1, 1),
                  **kwargs):
@@ -60,7 +63,7 @@ class SpatialSeparableConv(tf.keras.layers.Layer):
         self.filters = filters
         self.kernel_size = kernel_size
         self.strides = strides
-        
+
         # 1D path
         self.conv1d = tf.keras.layers.Conv3D(
             filters=filters // 2,
@@ -68,7 +71,7 @@ class SpatialSeparableConv(tf.keras.layers.Layer):
             strides=(strides[0], 1, 1),
             padding='same'
         )
-        
+
         # 2D path
         self.conv2d = tf.keras.layers.Conv3D(
             filters=filters,
@@ -77,7 +80,7 @@ class SpatialSeparableConv(tf.keras.layers.Layer):
             padding='same'
         )
 
-    @tf.function    
+    @tf.function
     def call(self, inputs):
         x = self.conv1d(inputs)
         return self.conv2d(x)
@@ -91,17 +94,18 @@ class SpatialSeparableConv(tf.keras.layers.Layer):
         })
         return config
 
+
 class AnalysisTransform(tf.keras.layers.Layer):
     """Analysis transform with progressive channel expansion."""
-    
+
     def __init__(self, config: TransformConfig, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-        
+
         # Define layers
         self.conv_layers = []
         current_filters = config.filters
-        
+
         for i in range(3):  # Three blocks as per paper
             if config.conv_type == 'separable':
                 conv = SpatialSeparableConv(
@@ -116,14 +120,14 @@ class AnalysisTransform(tf.keras.layers.Layer):
                     strides=config.strides,
                     padding='same'
                 )
-            
+
             self.conv_layers.append(conv)
-            
+
             if config.activation == 'cenic_gdn':
                 self.conv_layers.append(CENICGDN(current_filters))
             else:
                 self.conv_layers.append(tf.keras.layers.ReLU())
-                
+
             current_filters *= 2  # Progressive channel expansion
 
     @tf.function
@@ -140,17 +144,18 @@ class AnalysisTransform(tf.keras.layers.Layer):
         })
         return config
 
+
 class SynthesisTransform(tf.keras.layers.Layer):
     """Synthesis transform with progressive channel reduction."""
-    
+
     def __init__(self, config: TransformConfig, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-        
+
         # Define layers
         self.conv_layers = []
         current_filters = config.filters * 4  # Start with max channels
-        
+
         for i in range(3):  # Three blocks as per paper
             if config.conv_type == 'separable':
                 conv = SpatialSeparableConv(
@@ -165,14 +170,14 @@ class SynthesisTransform(tf.keras.layers.Layer):
                     strides=config.strides,
                     padding='same'
                 )
-            
+
             self.conv_layers.append(conv)
-            
+
             if config.activation == 'cenic_gdn':
                 self.conv_layers.append(CENICGDN(current_filters))
             else:
                 self.conv_layers.append(tf.keras.layers.ReLU())
-                
+
             current_filters = max(current_filters // 2, config.filters)  # Progressive reduction
 
     @tf.function
@@ -188,6 +193,7 @@ class SynthesisTransform(tf.keras.layers.Layer):
             'config': self.config
         })
         return config
+
 
 class DeepCompressModel(tf.keras.Model):
     """Complete DeepCompress model implementation."""

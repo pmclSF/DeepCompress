@@ -1,8 +1,6 @@
 """Tests for channel-wise context model."""
 
 import tensorflow as tf
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 

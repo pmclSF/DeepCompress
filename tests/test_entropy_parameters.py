@@ -1,8 +1,6 @@
 """Tests for entropy parameters network and mean-scale hyperprior."""
 
 import tensorflow as tf
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 

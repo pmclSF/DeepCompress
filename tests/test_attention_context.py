@@ -1,7 +1,6 @@
 """Tests for attention-based context model."""
 
 import tensorflow as tf
-import numpy as np
 import pytest
 import sys
 from pathlib import Path

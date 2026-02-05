@@ -2,7 +2,6 @@
 
 import tensorflow as tf
 import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
@@ -53,9 +52,9 @@ class TestMaskedConv3D(tf.test.TestCase):
             for h in range(kh):
                 for w in range(kw):
                     is_future = (
-                        d > center[0] or
-                        (d == center[0] and h > center[1]) or
-                        (d == center[0] and h == center[1] and w > center[2])
+                        d > center[0]
+                        or (d == center[0] and h > center[1])
+                        or (d == center[0] and h == center[1] and w > center[2])
                     )
                     is_center = (d == center[0] and h == center[1] and w == center[2])
 

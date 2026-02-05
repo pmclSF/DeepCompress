@@ -2,19 +2,20 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from typing import Optional, Dict, Any, Tuple
 
+
 class PatchedGaussianConditional(tf.keras.layers.Layer):
     """Gaussian conditional layer with native TF 2.x operations."""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  initial_scale: float = 1.0,
                  scale_table: Optional[tf.Tensor] = None,
                  tail_mass: float = 1e-9,
                  **kwargs):
         super().__init__(**kwargs)
-        
+
         self.initial_scale = initial_scale
         self.tail_mass = tail_mass
-        
+
         if scale_table is not None:
             self.scale_table = tf.Variable(
                 scale_table,
@@ -23,9 +24,9 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
             )
         else:
             self.scale_table = None
-            
+
         self._debug_tensors = {}
-        
+
     def build(self, input_shape):
         self.scale = self.add_weight(
             name='scale',
@@ -40,55 +41,55 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
             trainable=False
         )
         super().build(input_shape)
-        
+
     @tf.function
     def quantize_scale(self, scale: tf.Tensor) -> tf.Tensor:
         if self.scale_table is None:
             return scale
-            
+
         scale = tf.abs(scale)
         scale = tf.clip_by_value(
             scale,
             tf.reduce_min(self.scale_table),
             tf.reduce_max(self.scale_table)
         )
-        
+
         scale_expanded = tf.expand_dims(scale, -1)
         table_expanded = tf.expand_dims(self.scale_table, 0)
         distances = tf.abs(scale_expanded - table_expanded)
-        
+
         indices = tf.argmin(distances, axis=-1)
         return tf.gather(self.scale_table, indices)
-        
+
     @tf.function
     def compress(self, inputs: tf.Tensor) -> tf.Tensor:
         scale = self.quantize_scale(self.scale)
         centered = inputs - self.mean
         normalized = centered / scale
         quantized = tf.round(normalized)
-        
+
         self._debug_tensors.update({
             'compress_inputs': inputs,
             'compress_scale': scale,
             'compress_outputs': quantized
         })
-        
+
         return quantized
-        
+
     @tf.function
     def decompress(self, inputs: tf.Tensor) -> tf.Tensor:
         scale = self.quantize_scale(self.scale)
         denormalized = inputs * scale
         decompressed = denormalized + self.mean
-        
+
         self._debug_tensors.update({
             'decompress_inputs': inputs,
             'decompress_scale': scale,
             'decompress_outputs': decompressed
         })
-        
+
         return decompressed
-        
+
     @tf.function
     def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
         self._debug_tensors['inputs'] = inputs
@@ -96,10 +97,10 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
         outputs = self.decompress(compressed)
         self._debug_tensors['outputs'] = outputs
         return outputs
-        
+
     def get_debug_tensors(self) -> Dict[str, tf.Tensor]:
         return self._debug_tensors
-        
+
     def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
         config.update({
@@ -108,6 +109,7 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
             'tail_mass': self.tail_mass
         })
         return config
+
 
 class EntropyModel(tf.keras.Model):
     def __init__(self, **kwargs):
