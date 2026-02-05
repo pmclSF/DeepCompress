@@ -29,7 +29,7 @@ jobs:
 
     - name: Run tests
       run: |
-        # Run only the new entropy modeling tests (legacy tests have pre-existing issues)
+        # Run entropy modeling tests and performance tests (legacy tests have pre-existing issues)
         pytest \
           tests/test_entropy_parameters.py \
           tests/test_context_model.py \
@@ -37,7 +37,8 @@ jobs:
           tests/test_attention_context.py \
           tests/test_model_transforms.py \
           tests/test_integration.py \
-          -v --cov=src --cov-report=xml -m "not gpu"
+          tests/test_performance.py \
+          -v --cov=src --cov-report=xml -m "not gpu and not slow"
 
     - name: Upload coverage
       uses: codecov/codecov-action@v4
@@ -52,7 +53,7 @@ jobs:
       with:
         python-version: '3.10'
     - run: pip install flake8
-    # Lint only the new entropy modeling files (legacy files have pre-existing issues)
+    # Lint only the new entropy modeling and optimization files (legacy files have pre-existing issues)
     - name: Lint new source files
       run: |
         flake8 \
@@ -62,6 +63,9 @@ jobs:
           src/channel_context.py \
           src/attention_context.py \
           src/model_transforms.py \
+          src/constants.py \
+          src/precision_config.py \
+          src/benchmarks.py \
           --max-line-length=120
     - name: Lint new test files
       run: |
@@ -70,5 +74,6 @@ jobs:
           tests/test_context_model.py \
           tests/test_channel_context.py \
           tests/test_attention_context.py \
+          tests/test_performance.py \
           --max-line-length=120 \
           --ignore=E402,W503  # E402: imports after sys.path, W503: PEP8 updated to prefer breaks before operators

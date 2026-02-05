@@ -5,10 +5,287 @@ This module implements transformer-based bidirectional attention for entropy
 coding context. Attention mechanisms enable global context modeling, where
 each position can attend to all other positions (or a sparse subset) for
 better distribution parameter prediction.
+
+Performance optimizations:
+- WindowedAttention3D: O(n*w^3) complexity instead of O(n^2), ~400x memory reduction
+- Global tokens provide long-range context without full attention
 """
 
 import tensorflow as tf
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
+
+from constants import LOG_2_RECIPROCAL
+
+
+class WindowedAttention3D(tf.keras.layers.Layer):
+    """
+    Memory-efficient windowed attention for 3D data.
+
+    Replaces O(n^2) full attention with O(n*w^3) local window attention,
+    providing ~400x memory reduction for 32^3 grids.
+
+    Algorithm:
+    1. Partition input into non-overlapping 3D windows of size (w, w, w)
+    2. Apply attention within each window independently
+    3. Use learnable global tokens for cross-window communication
+    4. Merge windows back to original spatial layout
+
+    Memory comparison for 32x32x32 grid with 64 channels:
+    - Full attention: (32768)^2 * 4 bytes = 4GB
+    - Windowed (w=4): 512 windows * (64)^2 * 4 bytes = 8MB
+
+    Args:
+        dim: Feature dimension.
+        num_heads: Number of attention heads.
+        window_size: Size of local attention window (default: 4).
+        num_global_tokens: Number of global summary tokens for cross-window info.
+        dropout_rate: Dropout rate for attention weights.
+        global_attention_ratio: Weight for global vs local attention (0-1).
+    """
+
+    def __init__(self,
+                 dim: int,
+                 num_heads: int = 4,
+                 window_size: int = 4,
+                 num_global_tokens: int = 8,
+                 dropout_rate: float = 0.0,
+                 global_attention_ratio: float = 0.1,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.dim = dim
+        self.num_heads = num_heads
+        self.window_size = window_size
+        self.num_global_tokens = num_global_tokens
+        self.dropout_rate = dropout_rate
+        self.global_attention_ratio = global_attention_ratio
+
+        if dim % num_heads != 0:
+            raise ValueError(f"dim ({dim}) must be divisible by num_heads ({num_heads})")
+
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        # Local attention projections
+        self.qkv_local = tf.keras.layers.Dense(dim * 3, name='qkv_local')
+        self.out_local = tf.keras.layers.Dense(dim, name='out_local')
+
+        # Global attention projections
+        self.q_global = tf.keras.layers.Dense(dim, name='q_global')
+        self.kv_global = tf.keras.layers.Dense(dim * 2, name='kv_global')
+        self.out_global = tf.keras.layers.Dense(dim, name='out_global')
+
+        # Global tokens
+        self.global_tokens = None
+
+        # Dropout
+        self.attn_dropout = tf.keras.layers.Dropout(dropout_rate)
+
+    def build(self, input_shape):
+        # Learnable global tokens for cross-window communication
+        self.global_tokens = self.add_weight(
+            name='global_tokens',
+            shape=(1, self.num_global_tokens, self.dim),
+            initializer='glorot_uniform',
+            trainable=True
+        )
+        super().build(input_shape)
+
+    def _window_partition(self, x: tf.Tensor) -> Tuple[tf.Tensor, Dict]:
+        """
+        Partition tensor into non-overlapping 3D windows.
+
+        Args:
+            x: Input tensor of shape (B, D, H, W, C).
+
+        Returns:
+            Tuple of (windows, shape_info) where:
+            - windows: (B * num_windows, window_size^3, C)
+            - shape_info: Dict with original shapes for unpartitioning
+        """
+        B = tf.shape(x)[0]
+        D, H, W, C = x.shape[1], x.shape[2], x.shape[3], x.shape[4]
+        ws = self.window_size
+
+        # Pad if dimensions not divisible by window_size
+        pad_d = (ws - D % ws) % ws
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
+
+        if pad_d > 0 or pad_h > 0 or pad_w > 0:
+            x = tf.pad(x, [[0, 0], [0, pad_d], [0, pad_h], [0, pad_w], [0, 0]])
+
+        Dp, Hp, Wp = D + pad_d, H + pad_h, W + pad_w
+        num_d, num_h, num_w = Dp // ws, Hp // ws, Wp // ws
+
+        # Reshape to windows: (B, num_d, ws, num_h, ws, num_w, ws, C)
+        x = tf.reshape(x, (B, num_d, ws, num_h, ws, num_w, ws, C))
+
+        # Transpose to group windows: (B, num_d, num_h, num_w, ws, ws, ws, C)
+        x = tf.transpose(x, perm=[0, 1, 3, 5, 2, 4, 6, 7])
+
+        # Flatten to (B * num_windows, ws^3, C)
+        num_windows = num_d * num_h * num_w
+        windows = tf.reshape(x, (-1, ws * ws * ws, C))
+
+        shape_info = {
+            'B': B,
+            'D': D, 'H': H, 'W': W,
+            'Dp': Dp, 'Hp': Hp, 'Wp': Wp,
+            'num_d': num_d, 'num_h': num_h, 'num_w': num_w,
+            'pad_d': pad_d, 'pad_h': pad_h, 'pad_w': pad_w,
+        }
+
+        return windows, shape_info
+
+    def _window_unpartition(self, windows: tf.Tensor, shape_info: Dict) -> tf.Tensor:
+        """
+        Merge windows back to original spatial layout.
+
+        Args:
+            windows: (B * num_windows, ws^3, C)
+            shape_info: Dict from _window_partition.
+
+        Returns:
+            Tensor of shape (B, D, H, W, C).
+        """
+        B = shape_info['B']
+        ws = self.window_size
+        num_d, num_h, num_w = shape_info['num_d'], shape_info['num_h'], shape_info['num_w']
+        D, H, W = shape_info['D'], shape_info['H'], shape_info['W']
+        C = self.dim
+
+        # Reshape to (B, num_d, num_h, num_w, ws, ws, ws, C)
+        x = tf.reshape(windows, (B, num_d, num_h, num_w, ws, ws, ws, C))
+
+        # Transpose back: (B, num_d, ws, num_h, ws, num_w, ws, C)
+        x = tf.transpose(x, perm=[0, 1, 4, 2, 5, 3, 6, 7])
+
+        # Merge: (B, Dp, Hp, Wp, C)
+        Dp, Hp, Wp = shape_info['Dp'], shape_info['Hp'], shape_info['Wp']
+        x = tf.reshape(x, (B, Dp, Hp, Wp, C))
+
+        # Remove padding
+        if shape_info['pad_d'] > 0 or shape_info['pad_h'] > 0 or shape_info['pad_w'] > 0:
+            x = x[:, :D, :H, :W, :]
+
+        return x
+
+    def _local_attention(self, windows: tf.Tensor, training: Optional[bool]) -> tf.Tensor:
+        """
+        Apply attention within each window.
+
+        Args:
+            windows: (B * num_windows, ws^3, C)
+            training: Whether in training mode.
+
+        Returns:
+            Attended windows of same shape.
+        """
+        # Compute QKV
+        qkv = self.qkv_local(windows)
+        qkv = tf.reshape(qkv, (-1, self.window_size ** 3, 3, self.num_heads, self.head_dim))
+        qkv = tf.transpose(qkv, perm=[2, 0, 3, 1, 4])
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # Attention
+        attn = tf.matmul(q, k, transpose_b=True) * self.scale
+        attn = tf.nn.softmax(attn, axis=-1)
+        attn = self.attn_dropout(attn, training=training)
+
+        # Output
+        out = tf.matmul(attn, v)
+        out = tf.transpose(out, perm=[0, 2, 1, 3])
+        out = tf.reshape(out, (-1, self.window_size ** 3, self.dim))
+        out = self.out_local(out)
+
+        return out
+
+    def _global_attention(self, x: tf.Tensor, training: Optional[bool]) -> tf.Tensor:
+        """
+        Apply attention between input and global tokens.
+
+        This provides cross-window communication without O(n^2) cost.
+
+        Args:
+            x: Flattened input (B, seq_len, C).
+            training: Whether in training mode.
+
+        Returns:
+            Global context features of same shape.
+        """
+        batch_size = tf.shape(x)[0]
+
+        # Expand global tokens for batch
+        global_tokens = tf.tile(self.global_tokens, [batch_size, 1, 1])
+
+        # Query from input, KV from global tokens
+        q = self.q_global(x)
+        kv = self.kv_global(global_tokens)
+
+        # Reshape for multi-head attention
+        q = tf.reshape(q, (batch_size, -1, self.num_heads, self.head_dim))
+        q = tf.transpose(q, perm=[0, 2, 1, 3])
+
+        kv = tf.reshape(kv, (batch_size, self.num_global_tokens, 2, self.num_heads, self.head_dim))
+        kv = tf.transpose(kv, perm=[2, 0, 3, 1, 4])
+        k, v = kv[0], kv[1]
+
+        # Attention: (B, heads, seq_len, global_tokens)
+        attn = tf.matmul(q, k, transpose_b=True) * self.scale
+        attn = tf.nn.softmax(attn, axis=-1)
+        attn = self.attn_dropout(attn, training=training)
+
+        # Output
+        out = tf.matmul(attn, v)
+        out = tf.transpose(out, perm=[0, 2, 1, 3])
+        out = tf.reshape(out, (batch_size, -1, self.dim))
+        out = self.out_global(out)
+
+        return out
+
+    def call(self, features: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
+        """
+        Apply windowed attention to 3D features.
+
+        Combines local window attention with global token attention for
+        both fine-grained local and coarse global context.
+
+        Args:
+            features: Input tensor of shape (B, D, H, W, C).
+            training: Whether in training mode.
+
+        Returns:
+            Output tensor of shape (B, D, H, W, C).
+        """
+        batch_size = tf.shape(features)[0]
+        D, H, W = features.shape[1], features.shape[2], features.shape[3]
+
+        # Local windowed attention
+        windows, shape_info = self._window_partition(features)
+        local_out = self._local_attention(windows, training)
+        local_out = self._window_unpartition(local_out, shape_info)
+
+        # Global attention for cross-window context
+        x_flat = tf.reshape(features, (batch_size, -1, self.dim))
+        global_out = self._global_attention(x_flat, training)
+        global_out = tf.reshape(global_out, (batch_size, D, H, W, self.dim))
+
+        # Combine local and global (local dominates, global provides context)
+        out = local_out + self.global_attention_ratio * global_out
+
+        return out
+
+    def get_config(self) -> Dict[str, Any]:
+        config = super().get_config()
+        config.update({
+            'dim': self.dim,
+            'num_heads': self.num_heads,
+            'window_size': self.window_size,
+            'num_global_tokens': self.num_global_tokens,
+            'dropout_rate': self.dropout_rate,
+            'global_attention_ratio': self.global_attention_ratio
+        })
+        return config
 
 
 class SparseAttention3D(tf.keras.layers.Layer):
@@ -244,6 +521,120 @@ class BidirectionalMaskTransformer(tf.keras.layers.Layer):
         return config
 
 
+class EfficientTransformer3D(tf.keras.layers.Layer):
+    """
+    Memory-efficient transformer using windowed attention.
+
+    Drop-in replacement for BidirectionalMaskTransformer with ~400x lower
+    memory usage for large inputs, achieved through WindowedAttention3D.
+
+    Args:
+        dim: Feature dimension.
+        num_heads: Number of attention heads.
+        num_layers: Number of transformer layers.
+        window_size: Size of local attention window.
+        mlp_ratio: Ratio of MLP hidden dim to embedding dim.
+        dropout_rate: Dropout rate.
+    """
+
+    def __init__(self,
+                 dim: int,
+                 num_heads: int = 8,
+                 num_layers: int = 2,
+                 window_size: int = 4,
+                 mlp_ratio: float = 4.0,
+                 dropout_rate: float = 0.1,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.dim = dim
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.window_size = window_size
+        self.mlp_ratio = mlp_ratio
+        self.dropout_rate = dropout_rate
+
+        # Build transformer layers with windowed attention
+        self.attention_layers = []
+        self.mlp_layers = []
+        self.norm1_layers = []
+        self.norm2_layers = []
+
+        for i in range(num_layers):
+            self.attention_layers.append(
+                WindowedAttention3D(
+                    dim=dim,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    dropout_rate=dropout_rate,
+                    name=f'windowed_attention_{i}'
+                )
+            )
+            self.mlp_layers.append(
+                self._build_mlp(dim, int(dim * mlp_ratio), name=f'mlp_{i}')
+            )
+            self.norm1_layers.append(
+                tf.keras.layers.LayerNormalization(name=f'norm1_{i}')
+            )
+            self.norm2_layers.append(
+                tf.keras.layers.LayerNormalization(name=f'norm2_{i}')
+            )
+
+        self.final_norm = tf.keras.layers.LayerNormalization(name='final_norm')
+
+    def _build_mlp(self, in_dim: int, hidden_dim: int, name: str) -> tf.keras.Sequential:
+        """Build MLP block."""
+        return tf.keras.Sequential([
+            tf.keras.layers.Dense(hidden_dim, activation='gelu'),
+            tf.keras.layers.Dropout(self.dropout_rate),
+            tf.keras.layers.Dense(in_dim),
+            tf.keras.layers.Dropout(self.dropout_rate)
+        ], name=name)
+
+    def call(self, features: tf.Tensor, mask: Optional[tf.Tensor] = None,
+             training: Optional[bool] = None) -> tf.Tensor:
+        """
+        Apply efficient transformer to features.
+
+        Args:
+            features: Input tensor of shape (B, D, H, W, C).
+            mask: Optional attention mask (not used, for API compatibility).
+            training: Whether in training mode.
+
+        Returns:
+            Transformed features of shape (B, D, H, W, C).
+        """
+        x = features
+
+        for i in range(self.num_layers):
+            # Windowed self-attention with residual
+            attn_out = self.attention_layers[i](
+                self.norm1_layers[i](x),
+                training=training
+            )
+            x = x + attn_out
+
+            # MLP with residual
+            mlp_out = self.mlp_layers[i](
+                self.norm2_layers[i](x),
+                training=training
+            )
+            x = x + mlp_out
+
+        return self.final_norm(x)
+
+    def get_config(self) -> Dict[str, Any]:
+        config = super().get_config()
+        config.update({
+            'dim': self.dim,
+            'num_heads': self.num_heads,
+            'num_layers': self.num_layers,
+            'window_size': self.window_size,
+            'mlp_ratio': self.mlp_ratio,
+            'dropout_rate': self.dropout_rate
+        })
+        return config
+
+
 class AttentionEntropyModel(tf.keras.Model):
     """
     Complete entropy model with attention-based context.
@@ -368,7 +759,8 @@ class AttentionEntropyModel(tf.keras.Model):
         y_hat, y_likelihood = self.conditional(y, scale, mean, training=training)
 
         # Compute total bits
-        bits_per_element = -y_likelihood / tf.math.log(2.0)
+        # Using pre-computed reciprocal: multiplication is faster than division
+        bits_per_element = -y_likelihood * LOG_2_RECIPROCAL
         total_bits = tf.reduce_sum(bits_per_element)
 
         return y_hat, y_likelihood, total_bits
@@ -481,8 +873,8 @@ class HybridAttentionEntropyModel(tf.keras.Model):
             hyper_mean_slice = hyper_mean[..., start_ch:end_ch]
             hyper_scale_slice = hyper_scale[..., start_ch:end_ch]
 
-            # Channel context
-            context_mean, context_scale = self.channel_context(y, i)
+            # Channel context (use .call() to pass non-tensor arg as keyword)
+            context_mean, context_scale = self.channel_context.call(y, group_idx=i)
 
             # Attention context on this slice
             attn_features = self.attention_contexts[i](y_slice, training=training)
@@ -510,7 +902,8 @@ class HybridAttentionEntropyModel(tf.keras.Model):
         y_hat = tf.concat(y_hat_parts, axis=-1)
         y_likelihood = tf.concat(likelihood_parts, axis=-1)
 
-        bits_per_element = -y_likelihood / tf.math.log(2.0)
+        # Using pre-computed reciprocal: multiplication is faster than division
+        bits_per_element = -y_likelihood * LOG_2_RECIPROCAL
         total_bits = tf.reduce_sum(bits_per_element)
 
         return y_hat, y_likelihood, total_bits

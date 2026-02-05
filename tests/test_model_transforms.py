@@ -118,7 +118,8 @@ class TestModelTransforms(tf.test.TestCase):
         import tempfile
         import os
         with tempfile.TemporaryDirectory() as tmp_dir:
-            save_path = os.path.join(tmp_dir, 'model')
+            # Keras 3 requires .weights.h5 extension for save_weights
+            save_path = os.path.join(tmp_dir, 'model.weights.h5')
             model.save_weights(save_path)
             new_model = DeepCompressModel(self.config)
             # Build the new model first

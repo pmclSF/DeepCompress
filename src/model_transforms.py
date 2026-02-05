@@ -2,6 +2,8 @@ import tensorflow as tf
 from typing import Tuple
 from dataclasses import dataclass
 
+from constants import LOG_2_RECIPROCAL
+
 
 @dataclass
 class TransformConfig:
@@ -35,8 +37,8 @@ class CENICGDN(tf.keras.layers.Layer):
         )
         super().build(input_shape)
 
-    @tf.function
     def call(self, x):
+        # Note: XLA compilation removed as it breaks gradient flow when layers are composed
         norm = tf.abs(x)
         # Use axis 4 (channel dimension) for 5D tensors (batch, D, H, W, C)
         norm = tf.tensordot(norm, self.gamma, [[4], [0]])
@@ -80,8 +82,8 @@ class SpatialSeparableConv(tf.keras.layers.Layer):
             padding='same'
         )
 
-    @tf.function
     def call(self, inputs):
+        # Note: XLA compilation removed as it breaks gradient flow when layers are composed
         x = self.conv1d(inputs)
         return self.conv2d(x)
 
@@ -130,8 +132,8 @@ class AnalysisTransform(tf.keras.layers.Layer):
 
             current_filters *= 2  # Progressive channel expansion
 
-    @tf.function
     def call(self, inputs):
+        # Note: XLA compilation removed as it breaks gradient flow when layers are composed
         x = inputs
         for layer in self.conv_layers:
             x = layer(x)
@@ -180,8 +182,8 @@ class SynthesisTransform(tf.keras.layers.Layer):
 
             current_filters = max(current_filters // 2, config.filters)  # Progressive reduction
 
-    @tf.function
     def call(self, inputs):
+        # Note: XLA compilation removed as it breaks gradient flow when layers are composed
         x = inputs
         for layer in self.conv_layers:
             x = layer(x)
@@ -389,7 +391,8 @@ class DeepCompressModelV2(tf.keras.Model):
                 y_noisy = tf.round(y)
             compressed, likelihood = self.entropy_module(y_noisy)
             y_hat = y_noisy
-            total_bits = -tf.reduce_sum(likelihood) / tf.math.log(2.0)
+            # Using pre-computed reciprocal: multiplication is faster than division
+            total_bits = -tf.reduce_sum(likelihood) * LOG_2_RECIPROCAL
         else:
             # Advanced entropy models
             y_hat, likelihood, total_bits = self.entropy_module(
