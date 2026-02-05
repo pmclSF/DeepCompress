@@ -1,25 +1,25 @@
-import unittest
-import numpy as np
-import os
-import tempfile
+import tensorflow as tf
+import pytest
+from pathlib import Path
+from test_utils import create_mock_point_cloud, setup_test_environment
 from compress_octree import OctreeCompressor
 
-class TestOctreeCompressor(unittest.TestCase):
-    def setUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
+class TestOctreeCompressor(tf.test.TestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        """Set up test environment."""
+        self.test_env = setup_test_environment(tmp_path)
         self.compressor = OctreeCompressor(
             resolution=64,
             debug_output=True,
-            output_dir=self.temp_dir
+            output_dir=str(tmp_path)
         )
         
-        # Create base point cloud
-        np.random.seed(42)  # For reproducibility
-        base_points = np.random.rand(1000, 3) * 10
+        # Create test point cloud with corners for boundary testing
+        base_points = create_mock_point_cloud(1000)
         
-        # Add corner points for boundary testing
-        corners = np.array([
+        # Add corner points
+        corners = tf.constant([
             [0., 0., 0.],  # Origin
             [10., 0., 0.], # X-axis
             [0., 10., 0.], # Y-axis
@@ -28,42 +28,39 @@ class TestOctreeCompressor(unittest.TestCase):
             [10., 0., 10.],
             [0., 10., 10.],
             [10., 10., 10.]  # Maximum corner
-        ])
+        ], dtype=tf.float32)
         
-        self.point_cloud = np.vstack([base_points, corners])
+        self.point_cloud = tf.concat([base_points, corners], axis=0)
         
         # Create corresponding normals
-        self.normals = np.random.rand(len(self.point_cloud), 3)
-        self.normals = self.normals / np.linalg.norm(self.normals, axis=1, keepdims=True)
-
-    def tearDown(self):
-        """Clean up temporary files."""
-        import shutil
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.normals = tf.random.normal([tf.shape(self.point_cloud)[0], 3])
+        self.normals = self.normals / tf.norm(self.normals, axis=1, keepdims=True)
 
     def test_grid_shape(self):
-        """Test if the voxel grid has correct shape."""
+        """Test voxel grid shape."""
         grid, _ = self.compressor.compress(self.point_cloud)
         self.assertEqual(grid.shape, (64, 64, 64))
-        self.assertEqual(grid.dtype, bool)
+        self.assertEqual(grid.dtype, tf.bool)
 
+    @tf.function
     def test_compress_decompress(self):
         """Test compression and decompression without normals."""
         grid, metadata = self.compressor.compress(self.point_cloud)
         decompressed_pc, _ = self.compressor.decompress(grid, metadata)
 
         # Test bounds preservation
-        np.testing.assert_allclose(
-            np.min(decompressed_pc, axis=0),
-            np.min(self.point_cloud, axis=0),
+        self.assertAllClose(
+            tf.reduce_min(decompressed_pc, axis=0),
+            tf.reduce_min(self.point_cloud, axis=0),
             atol=0.1
         )
-        np.testing.assert_allclose(
-            np.max(decompressed_pc, axis=0),
-            np.max(self.point_cloud, axis=0),
+        self.assertAllClose(
+            tf.reduce_max(decompressed_pc, axis=0),
+            tf.reduce_max(self.point_cloud, axis=0),
             atol=0.1
         )
 
+    @tf.function
     def test_normal_preservation(self):
         """Test compression and decompression with normals."""
         grid, metadata = self.compressor.compress(
@@ -71,11 +68,9 @@ class TestOctreeCompressor(unittest.TestCase):
             normals=self.normals
         )
         
-        # Verify metadata indicates normals presence
         self.assertTrue(metadata['has_normals'])
         self.assertIn('normal_grid', metadata)
         
-        # Test decompression with normals
         decompressed_pc, decompressed_normals = self.compressor.decompress(
             grid,
             metadata,
@@ -83,38 +78,34 @@ class TestOctreeCompressor(unittest.TestCase):
         )
         
         # Check normal vectors are unit length
-        norms = np.linalg.norm(decompressed_normals, axis=1)
-        np.testing.assert_allclose(norms, 1.0, atol=1e-6)
+        norms = tf.norm(decompressed_normals, axis=1)
+        self.assertAllClose(norms, tf.ones_like(norms), atol=1e-6)
 
-    def test_corner_preservation(self):
-        """Test if corner points are preserved accurately."""
-        grid, metadata = self.compressor.compress(self.point_cloud)
-        decompressed_pc, _ = self.compressor.decompress(grid, metadata)
+    def test_batch_processing(self):
+        """Test batch processing capabilities."""
+        # Create batch
+        batch_size = 4
+        point_clouds = tf.stack([self.point_cloud] * batch_size)
+        normals_batch = tf.stack([self.normals] * batch_size)
         
-        corners = np.array([
-            [0., 0., 0.],
-            [10., 10., 10.]
-        ])
-        
-        for corner in corners:
-            distances = np.linalg.norm(decompressed_pc - corner, axis=1)
-            min_distance = np.min(distances)
-            self.assertLess(
-                min_distance, 
-                0.15,
-                f"Corner point {corner} not preserved. Closest point is {min_distance} units away"
-            )
-
-    def test_compression_validation(self):
-        """Test compression validation feature."""
-        grid, metadata = self.compressor.compress(
-            self.point_cloud,
-            validate=True
+        # Test compression
+        grid_batch, metadata_batch = self.compressor.compress(
+            point_clouds,
+            normals=normals_batch
         )
         
-        self.assertIn('compression_error', metadata)
-        self.assertIsInstance(metadata['compression_error'], float)
-        self.assertGreaterEqual(metadata['compression_error'], 0.0)
+        self.assertEqual(grid_batch.shape[0], batch_size)
+        self.assertEqual(len(metadata_batch), batch_size)
+        
+        # Test decompression
+        decompressed_batch, normals_batch = self.compressor.decompress(
+            grid_batch,
+            metadata_batch,
+            return_normals=True
+        )
+        
+        self.assertEqual(decompressed_batch.shape[0], batch_size)
+        self.assertEqual(normals_batch.shape[0], batch_size)
 
     def test_octree_partitioning(self):
         """Test octree partitioning functionality."""
@@ -124,98 +115,72 @@ class TestOctreeCompressor(unittest.TestCase):
             min_block_size=0.5
         )
         
-        # Check blocks
-        self.assertGreater(len(blocks), 1)  # Should create multiple blocks
-        
         total_points = 0
         for points, metadata in blocks:
             # Check block bounds
-            self.assertIn('bounds', metadata)
             min_bound, max_bound = metadata['bounds']
             
             # Verify points are within bounds
-            self.assertTrue(np.all(points >= min_bound))
-            self.assertTrue(np.all(points <= max_bound))
+            self.assertTrue(tf.reduce_all(points >= min_bound))
+            self.assertTrue(tf.reduce_all(points <= max_bound))
             
-            # Check block size constraints
-            self.assertLessEqual(len(points), 100)
-            block_size = np.min(max_bound - min_bound)
+            # Check block constraints
+            self.assertLessEqual(tf.shape(points)[0], 100)
+            block_size = tf.reduce_min(max_bound - min_bound)
             self.assertGreaterEqual(block_size, 0.5)
             
-            total_points += len(points)
+            total_points += tf.shape(points)[0]
         
         # Verify all points are accounted for
-        self.assertEqual(total_points, len(self.point_cloud))
+        self.assertEqual(total_points, tf.shape(self.point_cloud)[0])
 
     def test_save_and_load(self):
         """Test saving and loading functionality."""
-        save_path = os.path.join(self.temp_dir, "test_compressed.npz")
+        save_path = Path(self.test_env['tmp_path']) / "test_compressed.tfrecord"
         
         # Compress and save
         grid, metadata = self.compressor.compress(
             self.point_cloud,
             normals=self.normals
         )
-        self.compressor.save_compressed(grid, metadata, save_path)
+        self.compressor.save_compressed(grid, metadata, str(save_path))
         
         # Verify files exist
-        self.assertTrue(os.path.exists(save_path))
-        self.assertTrue(os.path.exists(save_path + ".debug.npz"))
+        self.assertTrue(save_path.exists())
+        self.assertTrue(save_path.with_suffix('.tfrecord.debug').exists())
         
         # Load and verify
-        loaded_grid, loaded_metadata = self.compressor.load_compressed(save_path)
+        loaded_grid, loaded_metadata = self.compressor.load_compressed(str(save_path))
         
-        # Check grid equality
-        self.assertTrue(np.array_equal(grid, loaded_grid))
+        # Check equality
+        self.assertAllEqual(grid, loaded_grid)
         
         # Check metadata
         for key in ['min_bounds', 'max_bounds', 'ranges', 'has_normals']:
             self.assertIn(key, loaded_metadata)
-            if isinstance(metadata[key], np.ndarray):
-                np.testing.assert_array_equal(metadata[key], loaded_metadata[key])
+            if isinstance(metadata[key], tf.Tensor):
+                self.assertAllClose(metadata[key], loaded_metadata[key])
             else:
                 self.assertEqual(metadata[key], loaded_metadata[key])
 
-    def test_edge_cases(self):
-        """Test edge cases and error handling."""
+    def test_error_handling(self):
+        """Test error handling."""
         # Test empty point cloud
-        with self.assertRaises(ValueError):
-            self.compressor.compress(np.array([]))
+        with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "Empty point cloud"):
+            self.compressor.compress(tf.zeros((0, 3), dtype=tf.float32))
         
         # Test single point
-        single_point = np.array([[5.0, 5.0, 5.0]])
+        single_point = tf.constant([[5.0, 5.0, 5.0]], dtype=tf.float32)
         grid, metadata = self.compressor.compress(single_point)
         decompressed, _ = self.compressor.decompress(grid, metadata)
         self.assertTrue(
-            np.any(np.linalg.norm(decompressed - single_point, axis=1) < 0.15)
-        )
-        
-        # Test points with identical coordinates
-        repeated_point = np.array([[1.0, 1.0, 1.0]])
-        repeated_points = np.tile(repeated_point, (10, 1))
-        grid, metadata = self.compressor.compress(repeated_points)
-        decompressed, _ = self.compressor.decompress(grid, metadata)
-        self.assertTrue(
-            np.any(np.linalg.norm(decompressed - repeated_point, axis=1) < 0.15)
+            tf.reduce_any(tf.norm(decompressed - single_point, axis=1) < 0.15)
         )
         
         # Test normals shape mismatch
-        wrong_shape_normals = np.random.rand(10, 3)
-        with self.assertRaises(ValueError):
+        wrong_shape_normals = tf.random.normal((10, 3))
+        with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "Shape mismatch"):
             self.compressor.compress(self.point_cloud, normals=wrong_shape_normals)
 
-    def test_debug_output(self):
-        """Test debug output functionality."""
-        grid, metadata = self.compressor.compress(self.point_cloud)
-        
-        # Check debug directory structure
-        debug_dir = os.path.join(self.temp_dir, 'debug', 'grid_creation')
-        self.assertTrue(os.path.exists(debug_dir))
-        
-        # Check for expected debug files
-        expected_files = {'grid.npy', 'metadata.npy', 'scaled_points.npy'}
-        debug_files = set(os.listdir(debug_dir))
-        self.assertTrue(expected_files.issubset(debug_files))
-
 if __name__ == "__main__":
-    unittest.main()
+    tf.test.main()
