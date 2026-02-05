@@ -401,9 +401,9 @@ class TestPerformanceRegression:
             h_coords = np.arange(kh)[None, :, None]
             w_coords = np.arange(kw)[None, None, :]
             is_future = (
-                (d_coords > center_d) |
-                ((d_coords == center_d) & (h_coords > center_h)) |
-                ((d_coords == center_d) & (h_coords == center_h) & (w_coords > center_w))
+                (d_coords > center_d)
+                | ((d_coords == center_d) & (h_coords > center_h))
+                | ((d_coords == center_d) & (h_coords == center_h) & (w_coords > center_w))
             )
             mask = np.where(is_future, 0.0, 1.0).astype(np.float32)
             return np.broadcast_to(

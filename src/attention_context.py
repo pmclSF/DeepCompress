@@ -12,7 +12,7 @@ Performance optimizations:
 """
 
 import tensorflow as tf
-from typing import Tuple, Optional, Dict, Any, List
+from typing import Tuple, Optional, Dict, Any
 
 from constants import LOG_2_RECIPROCAL
 
@@ -124,7 +124,6 @@ class WindowedAttention3D(tf.keras.layers.Layer):
         x = tf.transpose(x, perm=[0, 1, 3, 5, 2, 4, 6, 7])
 
         # Flatten to (B * num_windows, ws^3, C)
-        num_windows = num_d * num_h * num_w
         windows = tf.reshape(x, (-1, ws * ws * ws, C))
 
         shape_info = {

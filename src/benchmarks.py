@@ -21,13 +21,10 @@ Or programmatically:
 """
 
 import tensorflow as tf
-import numpy as np
 import time
-import functools
-from typing import Callable, Dict, Any, Optional, List, Tuple
+from typing import Callable, Dict, Any, Optional
 from dataclasses import dataclass, field
 from contextlib import contextmanager
-import sys
 
 
 @dataclass
@@ -283,8 +280,6 @@ def create_test_input(
 
 def benchmark_scale_quantization():
     """Benchmark scale quantization implementations."""
-    from entropy_model import PatchedGaussianConditional
-
     # Create scale table
     scale_table = tf.constant(
         [0.01 * (2 ** (i / 4)) for i in range(64)],
@@ -329,7 +324,6 @@ def benchmark_scale_quantization():
 
 def benchmark_masked_conv():
     """Benchmark mask creation implementations."""
-    from context_model import MaskedConv3D
     import numpy as np
 
     # Original loop-based implementation
