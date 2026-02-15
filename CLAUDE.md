@@ -6,7 +6,7 @@
 
 DeepCompress is a TensorFlow 2 library for learned point cloud compression. It compresses 3D voxelized occupancy grids using neural analysis/synthesis transforms with configurable entropy models. **It is not a PyTorch project.**
 
-Python 3.8+ · TensorFlow ≥ 2.11 · tensorflow-probability ~0.19 · MIT License
+Python 3.10+ · TensorFlow ~=2.15 · tensorflow-probability ~=0.23 · MIT License
 
 ## Before You Write Any Code
 
