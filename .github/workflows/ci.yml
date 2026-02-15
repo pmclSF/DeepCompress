@@ -11,12 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    - run: pip install ruff
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+    - name: Set up Python
+      run: uv python install 3.11
+    - name: Install dependencies
+      run: uv sync --dev
     - name: Ruff check
-      run: ruff check src/ tests/
+      run: uv run ruff check src/ tests/
 
   test:
     runs-on: ubuntu-latest
@@ -28,20 +30,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest-cov
+      run: uv sync --dev
 
     - name: Run tests
       run: |
-        pytest \
+        uv run pytest \
           tests/test_entropy_parameters.py \
           tests/test_context_model.py \
           tests/test_channel_context.py \
