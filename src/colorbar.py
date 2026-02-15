@@ -1,10 +1,12 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from typing import Tuple, Callable, Optional, List
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, List, Optional, Tuple
+
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+
 
 @dataclass
 class ColorbarConfig:
@@ -67,7 +69,10 @@ def get_colorbar(
     else:
         # Format numeric labels
         formatter = mpl.ticker.FormatStrFormatter(label_format)
-        cbar.ax.xaxis.set_major_formatter(formatter) if orientation == 'horizontal' else cbar.ax.yaxis.set_major_formatter(formatter)
+        if orientation == 'horizontal':
+            cbar.ax.xaxis.set_major_formatter(formatter)
+        else:
+            cbar.ax.yaxis.set_major_formatter(formatter)
 
     # Set font sizes
     cbar.ax.tick_params(labelsize=font_size)
@@ -96,10 +101,10 @@ def save_color_mapping(filename: str,
     # Create mapping
     norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
     cmap = plt.get_cmap(cmap)
-    
+
     values = np.linspace(vmin, vmax, num_samples)
     colors = [cmap(norm(v)) for v in values]
-    
+
     # Save to file
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
     with open(filename, 'w') as f:

@@ -1,14 +1,11 @@
-import unittest
-import time
 import subprocess
-from unittest.mock import patch, MagicMock
+import time
+import unittest
 from concurrent.futures import TimeoutError
-from parallel_process import (
-    parallel_process, 
-    Popen, 
-    ProcessTimeoutError,
-    ProcessResult
-)
+from unittest.mock import MagicMock, patch
+
+from parallel_process import Popen, ProcessResult, ProcessTimeoutError, parallel_process
+
 
 def square(x):
     """Simple square function for testing."""
@@ -37,17 +34,17 @@ class TestParallelProcess(unittest.TestCase):
     def test_parallel_process_timeout(self):
         """Test timeout functionality."""
         params = [0.1, 0.1, 2.0]  # Last task will timeout
-        
+
         with self.assertRaises(TimeoutError):
-            parallel_process(slow_function, params, 
+            parallel_process(slow_function, params,
                            num_parallel=2, timeout=1.0)
 
     def test_parallel_process_retries(self):
         """Test retry functionality for failing tasks."""
         params = [1, 2, 3]  # 2 will fail
-        
+
         with self.assertRaises(ValueError):
-            parallel_process(failing_function, params, 
+            parallel_process(failing_function, params,
                            num_parallel=2, max_retries=2)
 
     @patch("subprocess.Popen")
@@ -73,7 +70,7 @@ class TestParallelProcess(unittest.TestCase):
         mock_popen.return_value = mock_process
 
         cmd = ["echo", "test"]
-        with Popen(cmd) as process:
+        with Popen(cmd) as _:
             pass  # Context manager should handle cleanup
 
         mock_process.terminate.assert_called_once()
@@ -88,7 +85,7 @@ class TestParallelProcess(unittest.TestCase):
             success=True,
             error=None
         )
-        
+
         self.assertEqual(result.index, 0)
         self.assertEqual(result.result, 42)
         self.assertTrue(result.success)
