@@ -1,9 +1,13 @@
-import tensorflow as tf
-import pytest
-import numpy as np
+import json
 from pathlib import Path
+
+import numpy as np
+import pytest
+import tensorflow as tf
 import yaml
+
 from evaluation_pipeline import EvaluationPipeline, EvaluationResult
+
 
 class TestEvaluationPipeline:
     @pytest.fixture
@@ -24,7 +28,7 @@ class TestEvaluationPipeline:
                 'visualize': True
             }
         }
-        
+
         config_file = tmp_path / 'config.yml'
         with open(config_file, 'w') as f:
             yaml.dump(config, f)
@@ -59,7 +63,7 @@ class TestEvaluationPipeline:
     def test_evaluate_single(self, pipeline):
         point_cloud = tf.random.uniform((1000, 3), -1, 1)
         results = pipeline._evaluate_single(point_cloud)
-        
+
         for metric in ['psnr', 'chamfer', 'bd_rate']:
             assert metric in results
             assert isinstance(results[metric], float)
@@ -69,23 +73,23 @@ class TestEvaluationPipeline:
     def test_evaluate_full_pipeline(self, pipeline, tmp_path, create_sample_ply):
         test_dir = tmp_path / '8ivfb'
         test_dir.mkdir(parents=True)
-        
+
         num_samples = 3
         for i in range(num_samples):
             create_sample_ply(test_dir / f'test_{i}.ply')
-        
+
         pipeline.config['data']['ivfb_path'] = str(test_dir)
         results = pipeline.evaluate()
-        
+
         assert isinstance(results, dict)
         assert len(results) == num_samples
-        
+
         for filename, result in results.items():
             assert isinstance(result, EvaluationResult)
             assert hasattr(result, 'psnr')
             assert hasattr(result, 'chamfer_distance')
             assert hasattr(result, 'bd_rate')
-            assert all(not np.isnan(getattr(result, metric)) 
+            assert all(not np.isnan(getattr(result, metric))
                       for metric in ['psnr', 'chamfer_distance', 'bd_rate'])
 
     def test_generate_report(self, pipeline, tmp_path):
@@ -107,14 +111,14 @@ class TestEvaluationPipeline:
                 decompression_time=0.06
             )
         }
-        
+
         pipeline.generate_report(results)
         report_path = Path(pipeline.config['evaluation']['output_dir']) / "evaluation_report.json"
         assert report_path.exists()
-        
+
         with open(report_path) as f:
             report_data = json.load(f)
-            
+
         assert 'model_performance' in report_data
         assert 'aggregate_metrics' in report_data
         assert len(report_data['model_performance']) == len(results)
