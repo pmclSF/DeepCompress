@@ -1,8 +1,11 @@
-import tensorflow as tf
-import pytest
 from pathlib import Path
-from test_utils import create_mock_point_cloud, setup_test_environment
+
+import pytest
+import tensorflow as tf
+
 from compress_octree import OctreeCompressor
+from test_utils import create_mock_point_cloud, setup_test_environment
+
 
 class TestOctreeCompressor(tf.test.TestCase):
     @pytest.fixture(autouse=True)
@@ -14,10 +17,10 @@ class TestOctreeCompressor(tf.test.TestCase):
             debug_output=True,
             output_dir=str(tmp_path)
         )
-        
+
         # Create test point cloud with corners for boundary testing
         base_points = create_mock_point_cloud(1000)
-        
+
         # Add corner points
         corners = tf.constant([
             [0., 0., 0.],  # Origin
@@ -29,9 +32,9 @@ class TestOctreeCompressor(tf.test.TestCase):
             [0., 10., 10.],
             [10., 10., 10.]  # Maximum corner
         ], dtype=tf.float32)
-        
+
         self.point_cloud = tf.concat([base_points, corners], axis=0)
-        
+
         # Create corresponding normals
         self.normals = tf.random.normal([tf.shape(self.point_cloud)[0], 3])
         self.normals = self.normals / tf.norm(self.normals, axis=1, keepdims=True)
@@ -67,16 +70,16 @@ class TestOctreeCompressor(tf.test.TestCase):
             self.point_cloud,
             normals=self.normals
         )
-        
+
         self.assertTrue(metadata['has_normals'])
         self.assertIn('normal_grid', metadata)
-        
+
         decompressed_pc, decompressed_normals = self.compressor.decompress(
             grid,
             metadata,
             return_normals=True
         )
-        
+
         # Check normal vectors are unit length
         norms = tf.norm(decompressed_normals, axis=1)
         self.assertAllClose(norms, tf.ones_like(norms), atol=1e-6)
@@ -87,23 +90,23 @@ class TestOctreeCompressor(tf.test.TestCase):
         batch_size = 4
         point_clouds = tf.stack([self.point_cloud] * batch_size)
         normals_batch = tf.stack([self.normals] * batch_size)
-        
+
         # Test compression
         grid_batch, metadata_batch = self.compressor.compress(
             point_clouds,
             normals=normals_batch
         )
-        
+
         self.assertEqual(grid_batch.shape[0], batch_size)
         self.assertEqual(len(metadata_batch), batch_size)
-        
+
         # Test decompression
         decompressed_batch, normals_batch = self.compressor.decompress(
             grid_batch,
             metadata_batch,
             return_normals=True
         )
-        
+
         self.assertEqual(decompressed_batch.shape[0], batch_size)
         self.assertEqual(normals_batch.shape[0], batch_size)
 
@@ -114,47 +117,47 @@ class TestOctreeCompressor(tf.test.TestCase):
             max_points_per_block=100,
             min_block_size=0.5
         )
-        
+
         total_points = 0
         for points, metadata in blocks:
             # Check block bounds
             min_bound, max_bound = metadata['bounds']
-            
+
             # Verify points are within bounds
             self.assertTrue(tf.reduce_all(points >= min_bound))
             self.assertTrue(tf.reduce_all(points <= max_bound))
-            
+
             # Check block constraints
             self.assertLessEqual(tf.shape(points)[0], 100)
             block_size = tf.reduce_min(max_bound - min_bound)
             self.assertGreaterEqual(block_size, 0.5)
-            
+
             total_points += tf.shape(points)[0]
-        
+
         # Verify all points are accounted for
         self.assertEqual(total_points, tf.shape(self.point_cloud)[0])
 
     def test_save_and_load(self):
         """Test saving and loading functionality."""
         save_path = Path(self.test_env['tmp_path']) / "test_compressed.tfrecord"
-        
+
         # Compress and save
         grid, metadata = self.compressor.compress(
             self.point_cloud,
             normals=self.normals
         )
         self.compressor.save_compressed(grid, metadata, str(save_path))
-        
+
         # Verify files exist
         self.assertTrue(save_path.exists())
         self.assertTrue(save_path.with_suffix('.tfrecord.debug').exists())
-        
+
         # Load and verify
         loaded_grid, loaded_metadata = self.compressor.load_compressed(str(save_path))
-        
+
         # Check equality
         self.assertAllEqual(grid, loaded_grid)
-        
+
         # Check metadata
         for key in ['min_bounds', 'max_bounds', 'ranges', 'has_normals']:
             self.assertIn(key, loaded_metadata)
@@ -168,7 +171,7 @@ class TestOctreeCompressor(tf.test.TestCase):
         # Test empty point cloud
         with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "Empty point cloud"):
             self.compressor.compress(tf.zeros((0, 3), dtype=tf.float32))
-        
+
         # Test single point
         single_point = tf.constant([[5.0, 5.0, 5.0]], dtype=tf.float32)
         grid, metadata = self.compressor.compress(single_point)
@@ -176,7 +179,7 @@ class TestOctreeCompressor(tf.test.TestCase):
         self.assertTrue(
             tf.reduce_any(tf.norm(decompressed - single_point, axis=1) < 0.15)
         )
-        
+
         # Test normals shape mismatch
         wrong_shape_normals = tf.random.normal((10, 3))
         with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "Shape mismatch"):

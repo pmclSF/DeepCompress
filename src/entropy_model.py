@@ -1,6 +1,7 @@
+from typing import Any, Dict, Optional, Tuple
+
 import tensorflow as tf
 import tensorflow_probability as tfp
-from typing import Optional, Dict, Any, Tuple
 
 from constants import LOG_2_RECIPROCAL
 

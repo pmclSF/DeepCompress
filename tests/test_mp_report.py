@@ -1,7 +1,9 @@
-import pytest
-import os
 import json
+import os
 from tempfile import TemporaryDirectory
+
+import pytest
+
 from mp_report import generate_report, load_experiment_results
 
 
@@ -41,7 +43,7 @@ def create_mock_experiment_results(output_dir):
     input_file = os.path.join(output_dir, 'experiment_results.json')
     with open(input_file, 'w') as f:
         json.dump(experiment_results, f, indent=4)
-    
+
     return input_file, experiment_results
 
 

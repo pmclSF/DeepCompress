@@ -1,23 +1,25 @@
-import tensorflow as tf
-import os
 import argparse
 import glob
-import numpy as np
+import os
+
 import keras_tuner as kt
+import tensorflow as tf
+
 from ds_mesh_to_pc import read_off
+
 
 def create_model(hp):
     model = tf.keras.Sequential()
     model.add(tf.keras.layers.InputLayer(input_shape=(2048, 3)))
-    
+
     for i in range(hp.Int('num_layers', 1, 5)):
         model.add(tf.keras.layers.Dense(
             hp.Int(f'layer_{i}_units', min_value=64, max_value=1024, step=64),
             activation='relu'
         ))
-    
+
     model.add(tf.keras.layers.Dense(3, activation='sigmoid'))
-    
+
     model.compile(
         optimizer=tf.keras.optimizers.Adam(
             learning_rate=hp.Float('learning_rate', 1e-5, 1e-3, sampling='log')
@@ -28,7 +30,7 @@ def create_model(hp):
 
 def load_and_preprocess_data(input_dir, batch_size):
     file_paths = glob.glob(os.path.join(input_dir, "*.ply"))
-    
+
     def parse_ply_file(file_path):
         vertices, _ = read_off(file_path)
         return vertices
@@ -47,7 +49,7 @@ def load_and_preprocess_data(input_dir, batch_size):
     dataset = dataset.shuffle(buffer_size=len(file_paths))
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
-    
+
     return dataset
 
 def tune_hyperparameters(input_dir, output_dir, num_epochs=10):
@@ -63,10 +65,10 @@ def tune_hyperparameters(input_dir, output_dir, num_epochs=10):
 
     dataset = load_and_preprocess_data(input_dir, batch_size=32)
     tuner.search(dataset, epochs=num_epochs, validation_data=dataset)
-    
+
     best_model = tuner.get_best_models(num_models=1)[0]
     best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
-    
+
     print("Best Hyperparameters:", best_hps.values)
     best_model.save(os.path.join(output_dir, 'best_model'))
 

@@ -1,7 +1,10 @@
-import unittest
 import os
+import unittest
+
 import yaml
+
 from experiment import Experiment, ExperimentConfig
+
 
 class TestExperimentConfig(unittest.TestCase):
     def setUp(self):
@@ -21,8 +24,8 @@ class TestExperimentConfig(unittest.TestCase):
             yaml.dump(self.test_config, f)
 
     def tearDown(self):
-        for path in [self.test_config_path, 
-                    self.test_config["dataset_path"], 
+        for path in [self.test_config_path,
+                    self.test_config["dataset_path"],
                     self.test_config["experiment_dir"]]:
             if os.path.exists(path):
                 if os.path.isdir(path):
@@ -62,8 +65,8 @@ class TestExperiment(unittest.TestCase):
         self.experiment = Experiment(self.test_config_path)
 
     def tearDown(self):
-        for path in [self.test_config_path, 
-                    self.test_config["dataset_path"], 
+        for path in [self.test_config_path,
+                    self.test_config["dataset_path"],
                     self.test_config["experiment_dir"]]:
             if os.path.exists(path):
                 if os.path.isdir(path):

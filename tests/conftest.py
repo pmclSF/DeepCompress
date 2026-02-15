@@ -1,7 +1,9 @@
+from pathlib import Path
+
+import numpy as np
 import pytest
 import tensorflow as tf
-import numpy as np
-from pathlib import Path
+
 
 @pytest.fixture(scope="session")
 def test_data_dir(tmp_path_factory):
@@ -53,7 +55,7 @@ def tf_config():
     if gpus:
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
-    
+
     # Set random seeds for reproducibility
     tf.random.set_seed(42)
     np.random.seed(42)

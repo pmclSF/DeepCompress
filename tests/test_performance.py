@@ -9,15 +9,16 @@ These tests verify that:
 Run with: pytest tests/test_performance.py -v
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-import pytest
-import tensorflow as tf
-import numpy as np
 import time
 
+import numpy as np
+import pytest
+import tensorflow as tf
 
 # =============================================================================
 # Fixtures

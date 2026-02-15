@@ -1,8 +1,10 @@
-import tensorflow as tf
+
 import pytest
-from pathlib import Path
-from test_utils import create_mock_point_cloud, create_mock_ply_file, setup_test_files
-from ds_pc_octree_blocks import read_point_cloud, partition_point_cloud, save_blocks
+import tensorflow as tf
+
+from ds_pc_octree_blocks import partition_point_cloud, read_point_cloud, save_blocks
+from test_utils import create_mock_point_cloud, setup_test_files
+
 
 class TestPointCloudOctreeBlocks(tf.test.TestCase):
     @pytest.fixture(autouse=True)
@@ -38,7 +40,7 @@ class TestPointCloudOctreeBlocks(tf.test.TestCase):
         save_blocks(blocks, str(output_dir), "test")
         saved_files = list(output_dir.glob("test_block_*.ply"))
         self.assertEqual(len(saved_files), len(blocks))
-        
+
         for i, file_path in enumerate(sorted(saved_files)):
             loaded_points = read_point_cloud(str(file_path))
             self.assertAllEqual(loaded_points.shape, blocks[i].shape)
@@ -58,7 +60,7 @@ class TestPointCloudOctreeBlocks(tf.test.TestCase):
         empty_cloud = tf.zeros((0, 3), dtype=tf.float32)
         blocks = partition_point_cloud(empty_cloud, block_size=0.5, min_points=50)
         self.assertEqual(len(blocks), 0)
-        
+
         single_point = tf.constant([[0.0, 0.0, 0.0]], dtype=tf.float32)
         blocks = partition_point_cloud(single_point, block_size=0.5, min_points=1)
         self.assertEqual(len(blocks), 1)

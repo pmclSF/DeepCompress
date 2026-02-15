@@ -1,14 +1,17 @@
-import unittest
-import numpy as np
 import os
+import unittest
+
+import numpy as np
+
 from ds_mesh_to_pc import (
+    MeshData,
+    convert_mesh_to_point_cloud,
+    partition_point_cloud,
     read_off,
     sample_points_from_mesh,
     save_ply,
-    convert_mesh_to_point_cloud,
-    MeshData,
-    partition_point_cloud
 )
+
 
 class TestDsMeshToPc(unittest.TestCase):
     def setUp(self):
@@ -61,10 +64,10 @@ class TestDsMeshToPc(unittest.TestCase):
     def test_sample_points_from_mesh(self):
         mesh_data = MeshData(vertices=self.vertices, faces=None, vertex_normals=self.normals)
         points, normals = sample_points_from_mesh(mesh_data, num_points=3, compute_normals=True)
-        
+
         self.assertEqual(points.shape, (3, 3))
         self.assertEqual(normals.shape, (3, 3))
-        
+
         for point in points:
             self.assertTrue(
                 np.any(np.all(np.abs(self.vertices - point) < 1e-5, axis=1)),
@@ -88,7 +91,7 @@ class TestDsMeshToPc(unittest.TestCase):
             block_size=0.3,
             min_points=2
         )
-        
+
         self.assertGreater(len(blocks), 0)
         for block in blocks:
             self.assertIn('points', block)

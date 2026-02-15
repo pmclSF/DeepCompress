@@ -1,5 +1,7 @@
 import tensorflow as tf
-from entropy_model import PatchedGaussianConditional, EntropyModel
+
+from entropy_model import PatchedGaussianConditional
+
 
 class TestEntropyModel(tf.test.TestCase):
     def setUp(self):
@@ -7,7 +9,7 @@ class TestEntropyModel(tf.test.TestCase):
         self.mean = tf.random.uniform((5, 5), -1.0, 1.0)
         self.scale_table = tf.constant([0.1, 0.2, 0.3, 0.4, 0.5])
         self.inputs = tf.random.uniform((5, 5), -2.0, 2.0)
-        
+
         self.layer = PatchedGaussianConditional(
             scale=self.scale,
             mean=self.mean,
@@ -33,7 +35,7 @@ class TestEntropyModel(tf.test.TestCase):
         compressed = self.layer.compress(self.inputs)
         self.assertEqual(compressed.shape, self.inputs.shape)
         self.assertAllEqual(compressed, tf.round(compressed))
-        
+
         decompressed = self.layer.decompress(compressed)
         self.assertEqual(decompressed.shape, self.inputs.shape)
         self.assertAllClose(decompressed, self.layer(self.inputs), rtol=1e-5, atol=1e-5)
@@ -41,11 +43,11 @@ class TestEntropyModel(tf.test.TestCase):
     def test_debug_tensors(self):
         _ = self.layer(self.inputs)
         debug_tensors = self.layer.get_debug_tensors()
-        
-        required_keys = {'inputs', 'outputs', 'compress_inputs', 'compress_outputs', 
+
+        required_keys = {'inputs', 'outputs', 'compress_inputs', 'compress_outputs',
                         'decompress_inputs', 'decompress_outputs'}
         self.assertSetEqual(set(debug_tensors.keys()) - {'compress_scale', 'decompress_scale'}, required_keys)
-        
+
         for key in required_keys:
             self.assertEqual(debug_tensors[key].shape, self.inputs.shape)
 
@@ -53,7 +55,7 @@ class TestEntropyModel(tf.test.TestCase):
         config = self.layer.get_config()
         required_keys = {'scale', 'mean', 'scale_table', 'tail_mass'}
         self.assertSetEqual(set(config.keys()) & required_keys, required_keys)
-        
+
         reconstructed = PatchedGaussianConditional(**config)
         self.assertAllClose(reconstructed.scale, self.layer.scale)
         self.assertAllClose(reconstructed.mean, self.layer.mean)
