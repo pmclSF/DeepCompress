@@ -1,12 +1,14 @@
 import sys
-import tensorflow as tf
-import pytest
 from pathlib import Path
+
+import pytest
+import tensorflow as tf
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from test_utils import create_mock_point_cloud, create_mock_ply_file, setup_test_environment
 from ds_pc_octree_blocks import PointCloudProcessor
+from test_utils import create_mock_point_cloud, setup_test_environment
+
 
 class TestPointCloudOctreeBlocks(tf.test.TestCase):
     @pytest.fixture(autouse=True)

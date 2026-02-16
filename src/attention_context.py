@@ -11,8 +11,9 @@ Performance optimizations:
 - Global tokens provide long-range context without full attention
 """
 
+from typing import Any, Dict, Optional, Tuple
+
 import tensorflow as tf
-from typing import Tuple, Optional, Dict, Any
 
 from constants import LOG_2_RECIPROCAL
 
@@ -668,8 +669,8 @@ class AttentionEntropyModel(tf.keras.Model):
         self.num_attention_layers = num_attention_layers
 
         # Import here to avoid circular dependency
-        from entropy_parameters import EntropyParameters
         from entropy_model import ConditionalGaussian
+        from entropy_parameters import EntropyParameters
 
         # Hyperprior-based parameter prediction
         self.entropy_parameters = EntropyParameters(
@@ -803,9 +804,9 @@ class HybridAttentionEntropyModel(tf.keras.Model):
         self.num_channel_groups = num_channel_groups
         self.num_attention_layers = num_attention_layers
 
-        from entropy_parameters import EntropyParameters
         from channel_context import ChannelContext
         from entropy_model import ConditionalGaussian
+        from entropy_parameters import EntropyParameters
 
         # Hyperprior parameters
         self.entropy_parameters = EntropyParameters(

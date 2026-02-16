@@ -7,8 +7,20 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - run: pip install ruff
+    - name: Ruff check
+      run: ruff check src/ tests/
+
   test:
     runs-on: ubuntu-latest
+    needs: lint
     strategy:
       matrix:
         python-version: ['3.8', '3.9', '3.10']
@@ -29,7 +41,6 @@ jobs:
 
     - name: Run tests
       run: |
-        # Run entropy modeling tests and performance tests (legacy tests have pre-existing issues)
         pytest \
           tests/test_entropy_parameters.py \
           tests/test_context_model.py \
@@ -48,36 +59,3 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         file: ./coverage.xml
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    - run: pip install flake8
-    # Lint only the new entropy modeling and optimization files (legacy files have pre-existing issues)
-    - name: Lint new source files
-      run: |
-        flake8 \
-          src/entropy_parameters.py \
-          src/entropy_model.py \
-          src/context_model.py \
-          src/channel_context.py \
-          src/attention_context.py \
-          src/model_transforms.py \
-          src/constants.py \
-          src/precision_config.py \
-          src/benchmarks.py \
-          --max-line-length=120
-    - name: Lint new test files
-      run: |
-        flake8 \
-          tests/test_entropy_parameters.py \
-          tests/test_context_model.py \
-          tests/test_channel_context.py \
-          tests/test_attention_context.py \
-          tests/test_performance.py \
-          --max-line-length=120 \
-          --ignore=E402,W503  # E402: imports after sys.path, W503: PEP8 updated to prefer breaks before operators

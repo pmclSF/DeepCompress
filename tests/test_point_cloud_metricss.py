@@ -1,13 +1,15 @@
 import sys
-import tensorflow as tf
-import pytest
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pytest
+import tensorflow as tf
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from point_cloud_metrics import calculate_metrics, calculate_chamfer_distance, calculate_d1_metric
+from point_cloud_metrics import calculate_chamfer_distance, calculate_d1_metric, calculate_metrics
 from test_utils import create_mock_point_cloud
+
 
 class TestPointCloudMetrics(tf.test.TestCase):
     @pytest.fixture(autouse=True)

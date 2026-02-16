@@ -1,12 +1,14 @@
+import os
 import sys
 import unittest
-import numpy as np
-import os
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from map_color import load_point_cloud, load_colors, transfer_colors, save_colored_point_cloud
+from map_color import load_colors, load_point_cloud, save_colored_point_cloud, transfer_colors
+
 
 class TestMapColor(unittest.TestCase):
     """Test suite for point cloud color mapping operations."""

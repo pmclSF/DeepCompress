@@ -1,21 +1,23 @@
-import tensorflow as tf
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from test_utils import create_mock_voxel_grid
 from model_transforms import (
     CENICGDN,
-    SpatialSeparableConv,
     AnalysisTransform,
-    SynthesisTransform,
     DeepCompressModel,
     DeepCompressModelV2,
-    TransformConfig
+    SpatialSeparableConv,
+    SynthesisTransform,
+    TransformConfig,
 )
+from test_utils import create_mock_voxel_grid
+
 
 class TestModelTransforms(tf.test.TestCase):
     @pytest.fixture(autouse=True)
@@ -52,9 +54,8 @@ class TestModelTransforms(tf.test.TestCase):
         input_tensor = tf.random.uniform((2, 32, 32, 32, 32))
         output = conv(input_tensor)
         self.assertEqual(output.shape[-1], 64)
-        
+
         standard_params = 27 * 32 * 64
-        separable_params = (3 * 32 * 32 + 9 * 32 * 64)
         self.assertLess(len(conv.trainable_variables[0].numpy().flatten()), standard_params)
 
     def test_analysis_transform(self):
@@ -115,8 +116,8 @@ class TestModelTransforms(tf.test.TestCase):
         input_tensor = create_mock_voxel_grid(self.resolution, self.batch_size)
         x_hat1, y1, y_hat1, z1 = model(input_tensor, training=False)
 
-        import tempfile
         import os
+        import tempfile
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Keras 3 requires .weights.h5 extension for save_weights
             save_path = os.path.join(tmp_dir, 'model.weights.h5')

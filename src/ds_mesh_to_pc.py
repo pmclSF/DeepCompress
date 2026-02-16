@@ -1,9 +1,11 @@
-import numpy as np
 import argparse
 import logging
-from pathlib import Path
-from typing import Optional, Tuple, Dict, List
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
 
 @dataclass
 class MeshData:
@@ -105,7 +107,7 @@ def sample_points_from_mesh(
         # Sample points
         indices = np.random.choice(len(areas), num_points, p=probabilities)
         points = np.array(centroids)[indices]
-        
+
         # Get corresponding normals if requested
         normals = None
         if compute_normals and mesh_data.face_normals is not None:
@@ -117,7 +119,7 @@ def sample_points_from_mesh(
         else:
             indices = np.random.choice(len(mesh_data.vertices), num_points, replace=True)
         points = mesh_data.vertices[indices]
-        
+
         normals = None
         if compute_normals and mesh_data.vertex_normals is not None:
             normals = mesh_data.vertex_normals[indices]
@@ -144,31 +146,27 @@ def partition_point_cloud(
     """
     # Compute point cloud bounds
     min_bound = np.min(points, axis=0)
-    max_bound = np.max(points, axis=0)
-    
-    # Compute grid dimensions
-    grid_size = np.ceil((max_bound - min_bound) / block_size).astype(int)
-    
+
     # Initialize blocks
     blocks = []
-    
+
     # Assign points to grid cells
     grid_indices = np.floor((points - min_bound) / block_size).astype(int)
-    
+
     # Process each occupied grid cell
     unique_indices = np.unique(grid_indices, axis=0)
     for idx in unique_indices:
         # Find points in this cell
         mask = np.all(grid_indices == idx, axis=1)
         block_points = points[mask]
-        
+
         # Only keep blocks with enough points
         if len(block_points) >= min_points:
             block_data = {'points': block_points}
             if normals is not None:
                 block_data['normals'] = normals[mask]
             blocks.append(block_data)
-    
+
     return blocks
 
 def save_ply(
@@ -193,21 +191,21 @@ def save_ply(
             f.write("property float x\n")
             f.write("property float y\n")
             f.write("property float z\n")
-            
+
             if normals is not None:
                 f.write("property float nx\n")
                 f.write("property float ny\n")
                 f.write("property float nz\n")
-                    
+
             f.write("end_header\n")
-            
+
             # Write data
             for i in range(len(points)):
                 line = f"{points[i,0]} {points[i,1]} {points[i,2]}"
                 if normals is not None:
                     line += f" {normals[i,0]} {normals[i,1]} {normals[i,2]}"
                 f.write(line + "\n")
-                
+
     except Exception as e:
         logging.error(f"Error saving PLY file {file_path}: {e}")
 
@@ -236,14 +234,14 @@ def convert_mesh_to_point_cloud(
     mesh_data = read_off(input_path)
     if mesh_data is None:
         return
-        
+
     # Sample points
     points, normals = sample_points_from_mesh(
         mesh_data,
         num_points,
         compute_normals
     )
-    
+
     if partition_blocks:
         # Partition into blocks
         blocks = partition_point_cloud(
@@ -252,7 +250,7 @@ def convert_mesh_to_point_cloud(
             block_size,
             min_points_per_block
         )
-        
+
         # Save each block
         output_base = Path(output_path).with_suffix('')
         for i, block in enumerate(blocks):
@@ -284,12 +282,12 @@ def main():
                       help="Size of octree blocks (default: 1.0)")
     parser.add_argument("--min_points", type=int, default=100,
                       help="Minimum points per block (default: 100)")
-    
+
     args = parser.parse_args()
-    
+
     # Configure logging
     logging.basicConfig(level=logging.INFO)
-    
+
     # Convert mesh to point cloud
     convert_mesh_to_point_cloud(
         args.input,

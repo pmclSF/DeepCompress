@@ -6,9 +6,10 @@ that predict distribution parameters from previously decoded symbols, enabling
 more accurate entropy estimation and better compression.
 """
 
-import tensorflow as tf
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
-from typing import Tuple, Optional, Dict, Any
+import tensorflow as tf
 
 from constants import LOG_2_RECIPROCAL
 
@@ -264,8 +265,8 @@ class ContextualEntropyModel(tf.keras.Model):
         self.num_context_layers = num_context_layers
 
         # Import here to avoid circular dependency
-        from entropy_parameters import EntropyParameters
         from entropy_model import ConditionalGaussian
+        from entropy_parameters import EntropyParameters
 
         # Hyperprior-based parameter prediction
         self.entropy_parameters = EntropyParameters(

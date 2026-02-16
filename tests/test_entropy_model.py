@@ -4,7 +4,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 import tensorflow as tf
-from entropy_model import PatchedGaussianConditional, EntropyModel
+
+from entropy_model import EntropyModel, PatchedGaussianConditional
+
 
 
 class TestEntropyModel(tf.test.TestCase):
