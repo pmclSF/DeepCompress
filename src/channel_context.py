@@ -7,8 +7,9 @@ subsequent groups, enabling parallel decoding within each group while
 maintaining autoregressive structure across groups.
 """
 
+from typing import Any, Dict, List, Optional, Tuple
+
 import tensorflow as tf
-from typing import Tuple, Optional, Dict, Any, List
 
 from constants import LOG_2_RECIPROCAL
 
@@ -230,8 +231,8 @@ class ChannelContextEntropyModel(tf.keras.Model):
         self.channels_per_group = latent_channels // num_groups
 
         # Import here to avoid circular dependency
-        from entropy_parameters import EntropyParameters
         from entropy_model import ConditionalGaussian
+        from entropy_parameters import EntropyParameters
 
         # Hyperprior-based parameter prediction
         self.entropy_parameters = EntropyParameters(

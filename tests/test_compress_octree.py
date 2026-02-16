@@ -1,13 +1,15 @@
 import sys
-import tensorflow as tf
-import pytest
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pytest
+import tensorflow as tf
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from test_utils import create_mock_point_cloud, setup_test_environment
 from compress_octree import OctreeCompressor
+from test_utils import create_mock_point_cloud, setup_test_environment
+
 
 class TestOctreeCompressor(tf.test.TestCase):
     @pytest.fixture(autouse=True)

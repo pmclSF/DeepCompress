@@ -381,9 +381,6 @@ python ev_run_render.py config/train_config.yml
 G-PCC is the industry-standard point cloud codec from MPEG. Compare your results:
 
 ```bash
-# Run G-PCC on the same data
-python mp_run.py config/train_config.yml --num_parallel 8
-
 # Generate a final comparison report
 python mp_report.py \
     results/metrics/evaluation_report.json \
@@ -571,8 +568,11 @@ Install these with `pip install -r requirements.txt`:
 | pandas | ~=2.1 | Data analysis |
 | pyyaml | ~=6.0 | Configuration file parsing |
 | scipy | ~=1.11 | Scientific computing |
+| tqdm | ~=4.66 | Progress bars |
 | numba | ~=0.58 | JIT compilation for speed |
 | keras-tuner | ~=1.4 | Hyperparameter tuning (for cli_train.py) |
+| pytest | ~=8.0 | Test framework |
+| ruff | >=0.4 | Linter (configured in pyproject.toml) |
 
 ---
 
@@ -636,9 +636,12 @@ deepcompress/
 │
 ├── data/                           # Datasets (not in git)
 ├── results/                        # Output files (not in git)
+├── CLAUDE.md                       # AI agent coding standards
+├── pyproject.toml                  # Ruff linter configuration
 ├── pytest.ini                      # Pytest configuration and markers
-├── README.md                       # This file
-└── requirements.txt                # Python dependencies
+├── setup.py                        # Package setup
+├── requirements.txt                # Python dependencies
+└── README.md                       # This file
 ```
 
 ---

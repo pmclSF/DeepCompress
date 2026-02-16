@@ -1,7 +1,9 @@
-import yaml
-import os
 import logging
-from typing import Dict, Any
+import os
+from typing import Any, Dict
+
+import yaml
+
 
 class ExperimentConfig:
     def __init__(self, config_path: str):

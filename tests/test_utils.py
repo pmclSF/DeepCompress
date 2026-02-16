@@ -1,8 +1,9 @@
-import tensorflow as tf
-import numpy as np
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+import tensorflow as tf
 import yaml
-from typing import Optional, Dict, Any, List, Tuple
+
 
 def create_mock_point_cloud(num_points: int = 1000) -> tf.Tensor:
     """Create a mock point cloud for testing."""
@@ -21,14 +22,14 @@ def create_mock_normals(points: tf.Tensor) -> tf.Tensor:
     normals = tf.random.normal(points.shape)
     return tf.nn.l2_normalize(normals, axis=1)
 
-def create_mock_ply_file(filepath: Path, points: Optional[tf.Tensor] = None, 
+def create_mock_ply_file(filepath: Path, points: Optional[tf.Tensor] = None,
                         normals: Optional[tf.Tensor] = None):
     """Create a mock PLY file with given points and normals."""
     if points is None:
         points = create_mock_point_cloud()
     if normals is None:
         normals = create_mock_normals(points)
-        
+
     with open(filepath, 'w') as f:
         f.write("ply\n")
         f.write("format ascii 1.0\n")
@@ -36,14 +37,14 @@ def create_mock_ply_file(filepath: Path, points: Optional[tf.Tensor] = None,
         f.write("property float x\n")
         f.write("property float y\n")
         f.write("property float z\n")
-        
+
         if normals is not None:
             f.write("property float nx\n")
             f.write("property float ny\n")
             f.write("property float nz\n")
-            
+
         f.write("end_header\n")
-        
+
         for i in range(len(points)):
             line = f"{points[i, 0]} {points[i, 1]} {points[i, 2]}"
             if normals is not None:
@@ -63,10 +64,10 @@ def create_test_off_file(filepath: Path, mesh: Optional[Dict[str, tf.Tensor]] = 
     """Create a test OFF file with mesh data."""
     if mesh is None:
         mesh = create_test_mesh()
-    
+
     vertices = mesh['vertices']
     faces = mesh['faces']
-    
+
     with open(filepath, 'w') as f:
         f.write("OFF\n")
         f.write(f"{len(vertices)} {len(faces)} 0\n")
@@ -77,7 +78,7 @@ def create_test_off_file(filepath: Path, mesh: Optional[Dict[str, tf.Tensor]] = 
         for face in faces:
             f.write(f"3 {face[0]} {face[1]} {face[2]}\n")
 
-def create_test_dataset(batch_size: int, resolution: int, 
+def create_test_dataset(batch_size: int, resolution: int,
                        num_batches: int = 10) -> tf.data.Dataset:
     """Create a test dataset with proper shape."""
     return tf.data.Dataset.from_tensor_slices(
@@ -123,28 +124,28 @@ def create_test_config(tmp_path: Path) -> Dict[str, Any]:
 def setup_test_environment(tmp_path: Path) -> Dict[str, Any]:
     """Set up a complete test environment with files and configs."""
     config = create_test_config(tmp_path)
-    
+
     # Create directories
     for key in ['modelnet40_path', 'ivfb_path']:
         Path(config['data'][key]).mkdir(parents=True, exist_ok=True)
-        
+
     # Create test files
     test_files = {
         'mesh': Path(config['data']['modelnet40_path']) / "test.off",
         'point_cloud': Path(config['data']['ivfb_path']) / "test.ply",
         'blocks': Path(config['evaluation']['output_dir']) / "blocks"
     }
-    
+
     mesh = create_test_mesh()
     points = create_mock_point_cloud()
-    
+
     create_test_off_file(test_files['mesh'], mesh)
     create_mock_ply_file(test_files['point_cloud'], points)
-    
+
     config_path = tmp_path / 'config.yml'
     with open(config_path, 'w') as f:
         yaml.dump(config, f)
-        
+
     return {
         'config': config,
         'config_path': str(config_path),
@@ -158,10 +159,10 @@ class MockCallback(tf.keras.callbacks.Callback):
         super().__init__()
         self.batch_end_called = 0
         self.epoch_end_called = 0
-    
+
     def on_batch_end(self, batch, logs=None):
         self.batch_end_called += 1
-    
+
     def on_epoch_end(self, epoch, logs=None):
         self.epoch_end_called += 1
 

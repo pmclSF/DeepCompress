@@ -20,11 +20,12 @@ Or programmatically:
     print(f"Peak memory: {mem.peak_mb:.1f} MB")
 """
 
-import tensorflow as tf
 import time
-from typing import Callable, Dict, Any, Optional
-from dataclasses import dataclass, field
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional
+
+import tensorflow as tf
 
 
 @dataclass

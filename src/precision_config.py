@@ -18,9 +18,10 @@ Usage:
     dtype = PrecisionManager.get_compute_dtype()
 """
 
-import tensorflow as tf
-from typing import Optional
 import warnings
+from typing import Optional
+
+import tensorflow as tf
 
 
 class PrecisionManager:

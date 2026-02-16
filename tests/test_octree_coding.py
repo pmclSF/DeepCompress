@@ -5,8 +5,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 import unittest
+
 import tensorflow as tf
+
 from octree_coding import OctreeCoder, OctreeConfig
+
 
 class TestOctreeCoder(unittest.TestCase):
 
