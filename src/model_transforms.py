@@ -3,7 +3,7 @@ from typing import Tuple
 
 import tensorflow as tf
 
-from constants import LOG_2_RECIPROCAL, EPSILON
+from constants import EPSILON, LOG_2_RECIPROCAL
 
 
 @dataclass
