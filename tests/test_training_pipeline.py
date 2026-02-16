@@ -1,8 +1,12 @@
+import sys
 import tensorflow as tf
 import pytest
 import numpy as np
 from pathlib import Path
 import yaml
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 from training_pipeline import TrainingPipeline
 
 class TestTrainingPipeline:
@@ -18,7 +22,7 @@ class TestTrainingPipeline:
                 'augment': True
             },
             'model': {
-                'filters': 64,
+                'filters': 32,
                 'activation': 'cenic_gdn',
                 'conv_type': 'separable'
             },
@@ -67,8 +71,8 @@ class TestTrainingPipeline:
 
     @pytest.mark.parametrize("training", [True, False])
     def test_train_step(self, pipeline, training):
-        batch_size = 2
-        resolution = 32
+        batch_size = 1
+        resolution = 16
         point_cloud = tf.cast(tf.random.uniform((batch_size, resolution, resolution, resolution)) > 0.5, tf.float32)
         
         losses = pipeline._train_step(point_cloud, training=training)
@@ -82,14 +86,24 @@ class TestTrainingPipeline:
             assert loss_value >= 0
 
     def test_save_load_checkpoint(self, pipeline, tmp_path):
+        # Build the model by running a forward pass
+        dummy = tf.zeros((1, 16, 16, 16, 1))
+        pipeline.model(dummy, training=False)
+        y = pipeline.model.analysis(dummy)
+        pipeline.entropy_model(y, training=False)
+
         checkpoint_name = 'test_checkpoint'
         pipeline.save_checkpoint(checkpoint_name)
         
         checkpoint_dir = Path(pipeline.checkpoint_dir) / checkpoint_name
-        assert (checkpoint_dir / 'model.h5').exists()
-        assert (checkpoint_dir / 'entropy.h5').exists()
+        assert (checkpoint_dir / 'model.weights.h5').exists()
+        assert (checkpoint_dir / 'entropy.weights.h5').exists()
         
         new_pipeline = TrainingPipeline(pipeline.config_path)
+        # Build the new model before loading weights
+        new_pipeline.model(dummy, training=False)
+        y2 = new_pipeline.model.analysis(dummy)
+        new_pipeline.entropy_model(y2, training=False)
         new_pipeline.load_checkpoint(checkpoint_name)
         
         for w1, w2 in zip(pipeline.model.weights, new_pipeline.model.weights):
@@ -97,9 +111,9 @@ class TestTrainingPipeline:
 
     @pytest.mark.integration
     def test_training_loop(self, pipeline, tmp_path):
-        batch_size = 2
-        resolution = 32
-        
+        batch_size = 1
+        resolution = 16
+
         def create_sample_batch():
             return tf.cast(tf.random.uniform((batch_size, resolution, resolution, resolution)) > 0.5, tf.float32)
             

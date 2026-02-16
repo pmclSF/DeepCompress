@@ -108,16 +108,30 @@ class ExperimentReporter:
         """Generate comprehensive report of experiment results."""
         # Compute aggregate metrics
         aggregate_metrics = self.compute_aggregate_metrics()
-        
+
         # Get best performance metrics
-        best_performance = self._compute_best_metrics()
-        
+        best_perf = self._compute_best_metrics()
+
+        # Build best_performance with flat keys (best_psnr, best_bd_rate, etc.)
+        best_performance = {}
+        for metric, model_name in best_perf['models'].items():
+            best_performance[f'best_{metric}'] = model_name
+
+        # Find overall best model (highest PSNR)
+        best_model = {}
+        if best_perf['models'].get('psnr'):
+            best_model_name = best_perf['models']['psnr']
+            for file_name, results in self.experiment_results.items():
+                if file_name == best_model_name and isinstance(results, dict):
+                    best_model = {'file': file_name, **results}
+                    break
+
         # Compile model performance data
         model_performance = []
         for file_name, results in self.experiment_results.items():
             if file_name in ['timestamp', 'octree_levels', 'quantization_levels']:
                 continue
-                
+
             model_data = {
                 'file': file_name,
                 'metrics': {
@@ -131,16 +145,24 @@ class ExperimentReporter:
             }
             model_performance.append(model_data)
 
+        # Build aggregate statistics
+        aggregate_statistics = {
+            k: float(v.numpy()) if isinstance(v, tf.Tensor) else v
+            for k, v in aggregate_metrics.items()
+        }
+        aggregate_statistics['best_model'] = best_model
+
         report = {
-            'metadata': self.summary['experiment_metadata'],
+            'experiment_metadata': self.summary['experiment_metadata'],
             'aggregate_metrics': {
                 k: float(v.numpy()) if isinstance(v, tf.Tensor) else v
                 for k, v in aggregate_metrics.items()
             },
+            'aggregate_statistics': aggregate_statistics,
             'best_performance': best_performance,
             'model_performance': model_performance
         }
-        
+
         return report
 
     def save_report(self, output_file: str):

@@ -3,6 +3,12 @@ import tensorflow as tf
 import numpy as np
 from pathlib import Path
 
+
+def pytest_collection_modifyitems(items):
+    """Filter out tf.test.TestCase.test_session, which is a deprecated
+    context manager that pytest mistakenly collects as a test."""
+    items[:] = [item for item in items if not item.name == "test_session"]
+
 @pytest.fixture(scope="session")
 def test_data_dir(tmp_path_factory):
     """Create a temporary directory for test data."""

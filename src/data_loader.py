@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 import glob
 import os
 from pathlib import Path
@@ -16,20 +17,23 @@ class DataLoader:
             min_points=config.get('min_points', 100)
         )
         
-    @tf.function
     def process_point_cloud(self, file_path: str) -> tf.Tensor:
         """Process a single point cloud file."""
         # Read point cloud
-        vertices, _ = read_off(file_path.numpy().decode())
-        points = tf.convert_to_tensor(vertices, dtype=tf.float32)
-        
+        mesh_data = read_off(file_path.numpy().decode())
+        points = tf.convert_to_tensor(mesh_data.vertices, dtype=tf.float32)
+
         # Normalize points to unit cube
         points = self._normalize_points(points)
-        
+
+        # Apply augmentation before voxelization
+        if self.config.get('augment', True):
+            points = self._augment(points)
+
         # Voxelize points
         resolution = self.config.get('resolution', 64)
         voxelized = self._voxelize_points(points, resolution)
-        
+
         return voxelized
         
     @tf.function
@@ -75,13 +79,6 @@ class DataLoader:
             num_parallel_calls=tf.data.AUTOTUNE
         )
         
-        # Apply training augmentations
-        if self.config.get('augment', True):
-            dataset = dataset.map(
-                self._augment,
-                num_parallel_calls=tf.data.AUTOTUNE
-            )
-        
         # Batch and prefetch
         dataset = dataset.shuffle(1000)
         dataset = dataset.batch(self.config['training']['batch_size'])
@@ -123,9 +120,12 @@ class DataLoader:
         ])
         points = tf.matmul(points, rotation)
         
-        # Random jittering
-        if tf.random.uniform([]) < 0.5:
-            jitter = tf.random.normal(tf.shape(points), mean=0.0, stddev=0.01)
-            points = points + jitter
-            
+        # Random jittering (use tf.cond for @tf.function compatibility)
+        jitter = tf.random.normal(tf.shape(points), mean=0.0, stddev=0.01)
+        points = tf.cond(
+            tf.random.uniform([]) < 0.5,
+            lambda: points + jitter,
+            lambda: points
+        )
+
         return points

@@ -1,7 +1,11 @@
+import sys
 import tensorflow as tf
 import pytest
 import numpy as np
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 from data_loader import DataLoader
 
 class TestDataLoader:
@@ -15,6 +19,9 @@ class TestDataLoader:
                 'block_size': 1.0,
                 'min_points': 100,
                 'augment': True
+            },
+            'training': {
+                'batch_size': 2
             }
         }
 
@@ -52,9 +59,16 @@ class TestDataLoader:
             tf.convert_to_tensor([0.0, 1.0], dtype=tf.float32)
         )
 
-    def test_batch_processing(self, data_loader):
+    def test_batch_processing(self, data_loader, tmp_path, create_off_file, sample_point_cloud):
         resolution = 32
         batch_size = data_loader.config['training']['batch_size']
+        # Create temporary .off files so glob finds something
+        model_dir = tmp_path / "modelnet40" / "chair" / "train"
+        model_dir.mkdir(parents=True)
+        for i in range(batch_size):
+            create_off_file(model_dir / f"model_{i}.off", sample_point_cloud)
+        data_loader.config['data']['modelnet40_path'] = str(tmp_path / "modelnet40")
+        data_loader.config['resolution'] = resolution
         dataset = data_loader.load_training_data()
         batch = next(iter(dataset))
         assert batch.shape[0] == batch_size

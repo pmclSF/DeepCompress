@@ -30,8 +30,8 @@ def load_and_preprocess_data(input_dir, batch_size):
     file_paths = glob.glob(os.path.join(input_dir, "*.ply"))
     
     def parse_ply_file(file_path):
-        vertices, _ = read_off(file_path)
-        return vertices
+        mesh_data = read_off(file_path)
+        return mesh_data.vertices
 
     def data_generator():
         for file_path in file_paths:
@@ -82,7 +82,14 @@ def main():
     if args.tune:
         tune_hyperparameters(args.input_dir, args.output_dir, num_epochs=args.num_epochs)
     else:
-        model = create_model(hp=None)
+        # Build a default model without hyperparameter tuning
+        model = tf.keras.Sequential([
+            tf.keras.layers.InputLayer(input_shape=(2048, 3)),
+            tf.keras.layers.Dense(256, activation='relu'),
+            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Dense(3, activation='sigmoid')
+        ])
+        model.compile(optimizer='adam', loss='mean_squared_error')
         dataset = load_and_preprocess_data(args.input_dir, args.batch_size)
         model.fit(dataset, epochs=args.num_epochs)
         model.save(os.path.join(args.output_dir, 'trained_model'))
