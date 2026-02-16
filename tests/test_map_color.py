@@ -1,14 +1,19 @@
+import sys
 import unittest
 import numpy as np
 import os
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 from map_color import load_point_cloud, load_colors, transfer_colors, save_colored_point_cloud
 
 class TestMapColor(unittest.TestCase):
     """Test suite for point cloud color mapping operations."""
 
     def setUp(self):
-        self.test_off_file = "test.off"
         self.test_ply_file = "test.ply"
+        self.test_ply_points_only = "test_points.ply"
         self.output_ply = "output.ply"
         self.vertices = np.array([
             [0.0, 0.0, 0.0],
@@ -32,20 +37,26 @@ class TestMapColor(unittest.TestCase):
             [0, 0, 0]
         ])
 
-        with open(self.test_off_file, "w") as file:
-            file.write("OFF\n")
-            file.write(f"{len(self.vertices)} 0 0\n")
+        # Write a PLY file with points only (for test_load_point_cloud)
+        with open(self.test_ply_points_only, "w") as file:
+            file.write("ply\n")
+            file.write("format ascii 1.0\n")
+            file.write(f"element vertex {len(self.vertices)}\n")
+            file.write("property float x\n")
+            file.write("property float y\n")
+            file.write("property float z\n")
+            file.write("end_header\n")
             for vertex in self.vertices:
                 file.write(f"{vertex[0]} {vertex[1]} {vertex[2]}\n")
 
     def tearDown(self):
-        for file_path in [self.test_off_file, self.test_ply_file, self.output_ply]:
+        for file_path in [self.test_ply_file, self.test_ply_points_only, self.output_ply]:
             if os.path.exists(file_path):
                 os.remove(file_path)
 
     def test_load_point_cloud(self):
-        points = load_point_cloud(self.test_off_file)
-        np.testing.assert_array_equal(points, self.vertices)
+        points = load_point_cloud(self.test_ply_points_only)
+        np.testing.assert_array_almost_equal(points, self.vertices)
 
     def test_load_colors(self):
         with open(self.test_ply_file, "w") as file:
