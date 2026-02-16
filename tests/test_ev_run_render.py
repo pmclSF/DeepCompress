@@ -9,7 +9,7 @@ from PIL import Image
 import json
 
 # Add src directory to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 from ev_run_render import (
     load_experiment_config,
