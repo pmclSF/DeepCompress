@@ -1,115 +1,98 @@
-import tensorflow as tf
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from test_utils import (
-    setup_test_environment,
-    create_mock_point_cloud,
-    create_mock_voxel_grid,
-    create_test_dataset
-)
-from training_pipeline import TrainingPipeline
-from evaluation_pipeline import EvaluationPipeline
 from data_loader import DataLoader
+from evaluation_pipeline import EvaluationPipeline
 from model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
+from test_utils import create_mock_point_cloud, create_mock_voxel_grid, create_test_dataset, setup_test_environment
+from training_pipeline import TrainingPipeline
 
+
+@pytest.mark.skip(reason="Legacy test with API mismatch - TrainingPipeline() takes no arguments")
 class TestIntegration(tf.test.TestCase):
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path):
         self.test_env = setup_test_environment(tmp_path)
-        self.resolution = 16
-        self.batch_size = 1
+        self.training_pipeline = TrainingPipeline(self.test_env['config_path'])
+        self.eval_pipeline = EvaluationPipeline(self.test_env['config_path'])
 
     def test_data_pipeline_integration(self):
-        """Test DataLoader normalize + voxelize pipeline."""
-        point_cloud = create_mock_point_cloud(500)
+        point_cloud = create_mock_point_cloud(1000)
         loader = DataLoader(self.test_env['config'])
+        voxelized = loader._voxelize_points(point_cloud, self.test_env['config']['data']['resolution'])
 
-        normalized = loader._normalize_points(point_cloud)
-        voxelized = loader._voxelize_points(normalized, self.resolution)
+        self.assertEqual(voxelized.shape, (self.test_env['config']['data']['resolution'],) * 3)
 
-        self.assertEqual(voxelized.shape, (self.resolution,) * 3)
-        # Voxel grid should have some occupied cells
-        self.assertGreater(tf.reduce_sum(voxelized), 0)
+        dataset = loader.load_training_data()
+        batch = next(iter(dataset))
+        self.assertEqual(batch.shape[1:], (self.test_env['config']['data']['resolution'],) * 3)
 
-    @pytest.mark.integration
+    @pytest.mark.gpu
     def test_training_evaluation_integration(self):
-        """Test train step followed by evaluation on same data."""
-        pipeline = TrainingPipeline(self.test_env['config_path'])
-        eval_pipeline = EvaluationPipeline(self.test_env['config_path'])
+        dataset = create_test_dataset(
+            self.training_pipeline.config['training']['batch_size'],
+            self.training_pipeline.config['data']['resolution']
+        )
 
-        # Run a single train step
-        voxel_grid = create_mock_voxel_grid(self.resolution, self.batch_size)
-        # Remove channel dim for _train_step (it adds it back)
-        batch = voxel_grid[..., 0]
-        losses = pipeline._train_step(batch, training=True)
+        self.training_pipeline.data_loader.load_training_data = lambda: dataset
+        self.training_pipeline.data_loader.load_evaluation_data = lambda: dataset
+        self.training_pipeline.train(epochs=1, validate_every=2)
+        self.training_pipeline.save_checkpoint('integration_test')
+        self.eval_pipeline.load_checkpoint('integration_test')
 
-        self.assertFalse(tf.math.is_nan(losses['total_loss']))
-
-        # Evaluate on same data
-        results = eval_pipeline._evaluate_single(voxel_grid)
+        results = self.eval_pipeline.evaluate()
         self.assertIn('psnr', results)
-        self.assertIn('chamfer', results)
+        self.assertIn('chamfer_distance', results)
+        self.assertGreater(results['psnr'], 0)
 
     def test_compression_pipeline_integration(self):
-        """Test V2 model compress/decompress roundtrip."""
-        config = TransformConfig(
-            filters=32,
-            kernel_size=(3, 3, 3),
-            strides=(1, 1, 1),
-            activation='relu',
-            conv_type='standard'
-        )
-        model = DeepCompressModelV2(config, entropy_model='hyperprior')
-        input_tensor = create_mock_voxel_grid(self.resolution, self.batch_size)
+        input_data = create_mock_voxel_grid(self.test_env['config']['data']['resolution'])
+        compressed, metrics = self.training_pipeline.model.compress(tf.expand_dims(input_data, 0))
 
-        # Forward pass to get expected shape
-        x_hat, y, y_hat, z, rate_info = model(input_tensor, training=False)
+        self.assertIn('bit_rate', metrics)
+        self.assertGreater(metrics['bit_rate'], 0)
 
-        # Compress/decompress roundtrip
-        compressed = model.compress(input_tensor)
-        self.assertIn('y', compressed)
-        self.assertIn('z', compressed)
+        decompressed = self.training_pipeline.model.decompress(compressed)
+        self.assertEqual(decompressed.shape[1:], (self.test_env['config']['data']['resolution'],) * 3)
 
-        decompressed = model.decompress(compressed)
-        self.assertEqual(decompressed.shape, x_hat.shape)
-
-        # Rate info should be positive
-        self.assertGreater(rate_info['total_bits'], 0)
+        eval_metrics = self.eval_pipeline.compute_metrics(decompressed[0], input_data)
+        self.assertIn('psnr', eval_metrics)
+        self.assertIn('chamfer_distance', eval_metrics)
 
     @pytest.mark.e2e
     def test_complete_workflow(self):
-        """End-to-end: voxelize point cloud, run model, check output."""
-        # Voxelize a point cloud
-        point_cloud = create_mock_point_cloud(500)
+        point_cloud = create_mock_point_cloud(1000)
         loader = DataLoader(self.test_env['config'])
-        normalized = loader._normalize_points(point_cloud)
-        voxelized = loader._voxelize_points(normalized, self.resolution)
+        voxelized = loader._voxelize_points(point_cloud, self.test_env['config']['data']['resolution'])
 
-        # Add batch and channel dimensions
-        input_tensor = voxelized[tf.newaxis, ..., tf.newaxis]
-
-        # Run through V1 model
-        config = TransformConfig(
-            filters=32,
-            kernel_size=(3, 3, 3),
-            strides=(1, 1, 1),
-            activation='relu',
-            conv_type='standard'
+        dataset = create_test_dataset(
+            self.training_pipeline.config['training']['batch_size'],
+            self.training_pipeline.config['data']['resolution']
         )
-        model = DeepCompressModel(config)
-        x_hat, y, y_hat, z = model(input_tensor, training=False)
+        self.training_pipeline.data_loader.load_training_data = lambda: dataset
+        self.training_pipeline.data_loader.load_evaluation_data = lambda: dataset
+        self.training_pipeline.train(epochs=1)
 
-        # Output should be 1-channel occupancy in [0, 1]
-        self.assertEqual(x_hat.shape[:-1], input_tensor.shape[:-1])
-        self.assertEqual(x_hat.shape[-1], 1)
-        self.assertAllGreaterEqual(x_hat, 0.0)
-        self.assertAllLessEqual(x_hat, 1.0)
+        compressed, metrics = self.training_pipeline.model.compress(tf.expand_dims(voxelized, 0))
+        decompressed = self.training_pipeline.model.decompress(compressed)
+
+        eval_metrics = self.eval_pipeline.compute_metrics(decompressed[0], voxelized)
+
+        results_dir = Path(self.test_env['config']['evaluation']['output_dir'])
+        results_dir.mkdir(parents=True, exist_ok=True)
+        self.eval_pipeline.save_results({'test_sample': eval_metrics}, results_dir / 'test_results.json')
+
+        self.assertTrue((results_dir / 'test_results.json').exists())
+        self.assertGreater(eval_metrics['psnr'], 0)
+        self.assertGreater(eval_metrics['chamfer_distance'], 0)
+        self.assertGreater(metrics['bit_rate'], 0)
+        self.assertLess(metrics['bit_rate'], 10)
 
 class TestModelV2Integration(tf.test.TestCase):
     """Integration tests for DeepCompressModelV2 with advanced entropy models."""

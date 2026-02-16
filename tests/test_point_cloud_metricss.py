@@ -1,13 +1,9 @@
-import sys
-import tensorflow as tf
 import pytest
-import numpy as np
-from pathlib import Path
+import tensorflow as tf
 
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-
-from point_cloud_metrics import calculate_metrics, calculate_chamfer_distance, calculate_d1_metric
+from point_cloud_metrics import calculate_chamfer_distance, calculate_d1_metric, calculate_metrics
 from test_utils import create_mock_point_cloud
+
 
 class TestPointCloudMetrics(tf.test.TestCase):
     @pytest.fixture(autouse=True)
@@ -39,16 +35,30 @@ class TestPointCloudMetrics(tf.test.TestCase):
         with self.assertRaisesRegex(ValueError, "must have shape"):
             calculate_metrics(self.predicted, invalid_pc)
 
+    @tf.function
     def test_point_metrics_basic(self):
         metrics = calculate_metrics(self.predicted, self.ground_truth)
 
         required_metrics = {'d1', 'd2', 'chamfer'}
-        self.assertTrue(required_metrics.issubset(set(metrics.keys())))
+        self.assertSetsEqual(required_metrics, set(metrics.keys()) & required_metrics)
 
         for metric in required_metrics:
             self.assertGreater(metrics[metric], 0)
-            self.assertTrue(np.isfinite(metrics[metric]))
+            self.assertAllFinite(metrics[metric])
 
+    @tf.function
+    def test_batch_processing(self):
+        batch_size = 4
+        predicted_batch = tf.stack([self.predicted] * batch_size)
+        ground_truth_batch = tf.stack([self.ground_truth] * batch_size)
+
+        metrics_batch = calculate_metrics(predicted_batch, ground_truth_batch)
+        metrics_single = calculate_metrics(self.predicted, self.ground_truth)
+
+        for key in metrics_single.keys():
+            self.assertAllClose(metrics_batch[key], metrics_single[key], rtol=1e-5)
+
+    @tf.function
     def test_normal_metrics(self):
         metrics = calculate_metrics(
             self.predicted,
@@ -58,20 +68,18 @@ class TestPointCloudMetrics(tf.test.TestCase):
         )
 
         normal_metrics = {'n1', 'n2', 'normal_chamfer'}
-        self.assertTrue(normal_metrics.issubset(set(metrics.keys())))
+        self.assertSetsEqual(normal_metrics, set(metrics.keys()) & normal_metrics)
 
         for metric in normal_metrics:
             self.assertGreater(metrics[metric], 0)
-            self.assertTrue(np.isfinite(metrics[metric]))
+            self.assertAllFinite(metrics[metric])
 
-        np.testing.assert_allclose(
-            metrics['normal_chamfer'], metrics['n1'] + metrics['n2']
-        )
+        self.assertAllClose(metrics['normal_chamfer'], metrics['n1'] + metrics['n2'])
 
     def test_chamfer_distance(self):
         distance = calculate_chamfer_distance(self.predicted, self.ground_truth)
         self.assertGreater(distance, 0)
-        self.assertTrue(np.isfinite(distance))
+        self.assertAllFinite(distance)
 
         identical_distance = calculate_chamfer_distance(self.predicted, self.predicted)
         self.assertNear(identical_distance, 0, 1e-5)
@@ -79,7 +87,7 @@ class TestPointCloudMetrics(tf.test.TestCase):
     def test_d1_metric(self):
         d1 = calculate_d1_metric(self.predicted, self.ground_truth)
         self.assertGreater(d1, 0)
-        self.assertTrue(np.isfinite(d1))
+        self.assertAllFinite(d1)
 
         identical_d1 = calculate_d1_metric(self.predicted, self.predicted)
         self.assertNear(identical_d1, 0, 1e-5)

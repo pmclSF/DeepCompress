@@ -1,14 +1,15 @@
 """Tests for autoregressive context model."""
 
-import tensorflow as tf
-import numpy as np
 import sys
 from pathlib import Path
+
+import numpy as np
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from context_model import MaskedConv3D, AutoregressiveContext, ContextualEntropyModel
+from context_model import AutoregressiveContext, ContextualEntropyModel, MaskedConv3D
 
 
 class TestMaskedConv3D(tf.test.TestCase):

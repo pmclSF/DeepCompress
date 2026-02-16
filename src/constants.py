@@ -11,8 +11,9 @@ Usage:
     bits = -likelihood * LOG_2_RECIPROCAL  # Instead of / tf.math.log(2.0)
 """
 
-import tensorflow as tf
 import math
+
+import tensorflow as tf
 
 # Natural logarithm of 2: ln(2) = 0.693147...
 # Used for converting between natural log and log base 2

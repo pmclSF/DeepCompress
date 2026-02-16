@@ -1,19 +1,17 @@
-import sys
-import unittest
-import numpy as np
 import os
-from pathlib import Path
+import unittest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+import numpy as np
 
 from ds_mesh_to_pc import (
+    MeshData,
+    convert_mesh_to_point_cloud,
+    partition_point_cloud,
     read_off,
     sample_points_from_mesh,
     save_ply,
-    convert_mesh_to_point_cloud,
-    MeshData,
-    partition_point_cloud
 )
+
 
 class TestDsMeshToPc(unittest.TestCase):
     def setUp(self):
@@ -66,10 +64,10 @@ class TestDsMeshToPc(unittest.TestCase):
     def test_sample_points_from_mesh(self):
         mesh_data = MeshData(vertices=self.vertices, faces=None, vertex_normals=self.normals)
         points, normals = sample_points_from_mesh(mesh_data, num_points=3, compute_normals=True)
-        
+
         self.assertEqual(points.shape, (3, 3))
         self.assertEqual(normals.shape, (3, 3))
-        
+
         for point in points:
             self.assertTrue(
                 np.any(np.all(np.abs(self.vertices - point) < 1e-5, axis=1)),
@@ -93,7 +91,7 @@ class TestDsMeshToPc(unittest.TestCase):
             block_size=0.3,
             min_points=2
         )
-        
+
         self.assertGreater(len(blocks), 0)
         for block in blocks:
             self.assertIn('points', block)
@@ -108,9 +106,15 @@ class TestDsMeshToPc(unittest.TestCase):
             self.test_ply_file,
             num_points=3,
             compute_normals=True,
-            partition_blocks=False,
+            partition_blocks=True,
+            block_size=0.3,
+            min_points_per_block=2
         )
         self.assertTrue(os.path.exists(self.test_ply_file))
+        base_path = os.path.splitext(self.test_ply_file)[0]
+        block_files = [f for f in os.listdir('.')
+                      if f.startswith(f"{base_path}_block_") and f.endswith('.ply')]
+        self.assertGreater(len(block_files), 0)
 
 if __name__ == "__main__":
     unittest.main()

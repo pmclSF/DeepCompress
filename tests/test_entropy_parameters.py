@@ -1,14 +1,15 @@
 """Tests for entropy parameters network and mean-scale hyperprior."""
 
-import tensorflow as tf
 import sys
 from pathlib import Path
+
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from entropy_parameters import EntropyParameters, EntropyParametersWithContext
 from entropy_model import ConditionalGaussian, MeanScaleHyperprior
+from entropy_parameters import EntropyParameters, EntropyParametersWithContext
 
 
 class TestEntropyParameters(tf.test.TestCase):

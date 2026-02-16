@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepcompress"
+version = "0.1.0"
+description = "Learned 3D point cloud compression using neural analysis/synthesis transforms"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib~=3.8.0",
+    "pyntcloud~=0.3.1",
+    "numpy~=1.26.0",
+    "pandas~=2.1.0",
+    "tqdm~=4.66.0",
+    "tensorflow~=2.15.0",
+    "pyyaml~=6.0",
+    "scipy~=1.11.0",
+    "numba~=0.58.0",
+    "tensorflow-probability~=0.23.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest~=8.0.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F", "I", "E", "W"]
+ignore = [
+    "E402",   # module-level import not at top — tests use sys.path before imports
+    "E741",   # ambiguous variable name — common in math-heavy code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "model_transforms", "entropy_model", "entropy_parameters",
+    "context_model", "channel_context", "attention_context",
+    "constants", "precision_config", "data_loader",
+    "training_pipeline", "evaluation_pipeline", "experiment",
+    "compress_octree", "decompress_octree", "octree_coding",
+    "ds_mesh_to_pc", "ds_pc_octree_blocks", "ds_select_largest",
+    "ev_compare", "ev_run_render", "mp_report", "mp_run",
+    "quick_benchmark", "benchmarks", "parallel_process",
+    "point_cloud_metrics", "map_color", "colorbar",
+    "cli_train", "test_utils",
+]

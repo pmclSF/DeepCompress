@@ -14,16 +14,18 @@ Usage:
     python -m src.quick_benchmark --resolution 64 --batch_size 2
 """
 
-import tensorflow as tf
-import numpy as np
-import time
 import argparse
-from dataclasses import dataclass
-from typing import Tuple, Optional
+import os
 
 # Add src to path
 import sys
-import os
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+import tensorflow as tf
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
@@ -247,7 +249,7 @@ def run_benchmark(
     Returns:
         CompressionMetrics with results.
     """
-    print(f"\nBenchmark Configuration:")
+    print("\nBenchmark Configuration:")
     print(f"  Resolution:     {resolution}x{resolution}x{resolution}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Model version:  {model_version}")

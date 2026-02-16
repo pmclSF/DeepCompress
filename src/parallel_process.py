@@ -1,11 +1,11 @@
-import multiprocessing
-import subprocess
 import logging
+import subprocess
 import time
-from typing import Callable, Any, List, Dict, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from queue import Queue
+from typing import Any, Callable, Dict, List, Optional
+
 
 @dataclass
 class ProcessResult:
@@ -20,9 +20,9 @@ class ProcessTimeoutError(Exception):
     pass
 
 class Popen:
-    def __init__(self, 
-                 cmd: List[str], 
-                 stdout: Any = None, 
+    def __init__(self,
+                 cmd: List[str],
+                 stdout: Any = None,
                  stderr: Any = None,
                  timeout: Optional[float] = None):
         """
@@ -31,7 +31,7 @@ class Popen:
         self.cmd = cmd
         self.timeout = timeout
         self.start_time = time.time()
-        
+
         self.process = subprocess.Popen(
             cmd,
             stdout=stdout,
@@ -42,7 +42,7 @@ class Popen:
     def wait(self, timeout: Optional[float] = None) -> int:
         """Wait for the subprocess to complete with timeout."""
         wait_timeout = timeout or self.timeout
-        
+
         if wait_timeout is not None:
             try:
                 return self.process.wait(timeout=wait_timeout)
@@ -51,7 +51,7 @@ class Popen:
                 raise ProcessTimeoutError(
                     f"Process timed out after {wait_timeout} seconds: {' '.join(self.cmd)}"
                 )
-        
+
         return self.process.wait()
 
     def terminate(self):
@@ -121,22 +121,22 @@ def parallel_process(
     # Process all parameters in parallel
     result_queue: Queue = Queue()
     results_dict: Dict[int, ProcessResult] = {}
-    
+
     with ThreadPoolExecutor(max_workers=num_parallel) as executor:
         futures = [
             executor.submit(worker, i, param, result_queue)
             for i, param in enumerate(params_list)
         ]
-        
+
         # Wait for all tasks to complete
         for future in futures:
             future.result()  # This will propagate any exceptions
-    
+
     # Collect results and maintain order
     while len(results_dict) < len(params_list):
         result = result_queue.get()
         results_dict[result.index] = result
-    
+
     # Process results in order
     ordered_results = []
     for i in range(len(params_list)):
@@ -146,5 +146,5 @@ def parallel_process(
                 raise TimeoutError(str(result.error))
             raise result.error or RuntimeError(f"Task {i} failed without specific error")
         ordered_results.append(result.result)
-        
+
     return ordered_results

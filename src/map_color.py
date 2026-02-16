@@ -1,7 +1,8 @@
-import numpy as np
 import argparse
-from pathlib import Path
 from typing import Optional
+
+import numpy as np
+
 
 def load_point_cloud(file_path: str) -> Optional[np.ndarray]:
     """
@@ -16,9 +17,6 @@ def load_point_cloud(file_path: str) -> Optional[np.ndarray]:
     try:
         with open(file_path, 'r') as file:
             lines = file.readlines()
-            if "end_header\n" not in lines:
-                print(f"Error: no end_header found in {file_path}")
-                return None
             start = lines.index("end_header\n") + 1
             points = [list(map(float, line.split()[:3])) for line in lines[start:]]
             return np.array(points, dtype=np.float32)
@@ -39,9 +37,6 @@ def load_colors(file_path: str) -> Optional[np.ndarray]:
     try:
         with open(file_path, 'r') as file:
             lines = file.readlines()
-            if "end_header\n" not in lines:
-                print(f"Error: no end_header found in {file_path}")
-                return None
             start = lines.index("end_header\n") + 1
             colors = [list(map(float, line.split()[3:6])) for line in lines[start:] if len(line.split()) > 3]
             return np.array(colors, dtype=np.float32) / 255.0

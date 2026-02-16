@@ -6,8 +6,9 @@ This module implements networks that predict Gaussian distribution parameters
 where the distribution is adapted based on learned side information.
 """
 
+from typing import Optional, Tuple
+
 import tensorflow as tf
-from typing import Tuple, Optional
 
 
 class EntropyParameters(tf.keras.layers.Layer):
