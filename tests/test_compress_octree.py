@@ -116,6 +116,7 @@ class TestOctreeCompressor(tf.test.TestCase):
     def test_save_and_load(self):
         """Test saving and loading functionality."""
         save_path = Path(self.test_env['tmp_path']) / "test_compressed.npz"
+        meta_path = Path(str(save_path) + '.meta.json')
 
         # Compress and save
         grid, metadata = self.compressor.compress(
@@ -124,8 +125,9 @@ class TestOctreeCompressor(tf.test.TestCase):
         )
         self.compressor.save_compressed(grid, metadata, str(save_path))
 
-        # Verify file exists
+        # Verify both files exist
         self.assertTrue(save_path.exists())
+        self.assertTrue(meta_path.exists())
 
         # Load and verify
         loaded_grid, loaded_metadata = self.compressor.load_compressed(str(save_path))
@@ -136,6 +138,10 @@ class TestOctreeCompressor(tf.test.TestCase):
         # Check metadata
         for key in ['min_bounds', 'max_bounds', 'ranges', 'has_normals']:
             self.assertIn(key, loaded_metadata)
+
+        # Check array fields are numpy arrays after load
+        for key in ['min_bounds', 'max_bounds', 'ranges']:
+            self.assertIsInstance(loaded_metadata[key], np.ndarray)
 
     def test_error_handling(self):
         """Test error handling."""

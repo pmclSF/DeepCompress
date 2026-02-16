@@ -186,14 +186,35 @@ class OctreeCompressor:
 
     def save_compressed(self, grid: np.ndarray, metadata: Dict[str, Any], filename: str) -> None:
         """Save compressed data with metadata."""
-        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
-        np.savez_compressed(filename, grid=grid, metadata=metadata)
+        import json
 
-        if self.debug_output:
-            debug_path = f"{filename}.debug.npz"
-            np.savez_compressed(debug_path, **metadata)
+        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+        # Save grid without pickle (bool array, no object dtype)
+        np.savez_compressed(filename, grid=grid)
+        # Save metadata as JSON sidecar (safe, no arbitrary code execution)
+        meta_path = filename + '.meta.json'
+        serializable = {}
+        for k, v in metadata.items():
+            if isinstance(v, np.ndarray):
+                serializable[k] = v.tolist()
+            elif isinstance(v, (np.floating, np.integer)):
+                serializable[k] = v.item()
+            else:
+                serializable[k] = v
+        with open(meta_path, 'w') as f:
+            json.dump(serializable, f)
 
     def load_compressed(self, filename: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Load compressed data with metadata."""
-        data = np.load(filename, allow_pickle=True)
-        return data['grid'], data['metadata'].item()
+        import json
+
+        data = np.load(filename, allow_pickle=False)
+        grid = data['grid']
+        meta_path = filename + '.meta.json'
+        with open(meta_path, 'r') as f:
+            metadata = json.load(f)
+        # Convert lists back to numpy arrays for known array fields
+        for key in ('min_bounds', 'max_bounds', 'ranges', 'normal_grid'):
+            if key in metadata:
+                metadata[key] = np.array(metadata[key])
+        return grid, metadata
