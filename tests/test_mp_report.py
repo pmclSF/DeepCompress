@@ -1,10 +1,14 @@
 import json
 import os
+import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
 
-from mp_report import generate_report, load_experiment_results
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+from mp_report import ExperimentReporter, load_experiment_results
 
 
 # Helper function to create mock experiment results
@@ -61,7 +65,9 @@ def test_generate_report(setup_experiment):
 
     # Generate the report using the mock experiment results
     output_file = os.path.join(output_dir, "experiment_report.json")
-    generate_report(load_experiment_results(input_file), output_file)
+    results = load_experiment_results(input_file)
+    reporter = ExperimentReporter(results)
+    reporter.save_report(output_file)
 
     # Verify that the report is generated
     assert os.path.exists(output_file), "The report file was not created"
@@ -91,7 +97,8 @@ def test_best_performance_selection(setup_experiment):
 
     # Generate the report
     output_file = os.path.join(output_dir, "experiment_report.json")
-    generate_report(experiment_results, output_file)
+    reporter = ExperimentReporter(experiment_results)
+    reporter.save_report(output_file)
 
     # Load the generated report
     with open(output_file, 'r') as f:
@@ -106,12 +113,12 @@ def test_best_performance_selection(setup_experiment):
     assert best_performance['best_bd_rate'] == 'original_3.ply'
     # The best bitrate should be from "original_2.ply" (lowest bitrate is best)
     assert best_performance['best_bitrate'] == 'original_2.ply'
-    # The best compression ratio should be from "original_3.ply"
-    assert best_performance['best_compression_ratio'] == 'original_3.ply'
-    # The best compression time should be from "original_3.ply" (shorter is better)
+    # The best compression ratio should be from "original_1.ply" (lowest is best: 0.75)
+    assert best_performance['best_compression_ratio'] == 'original_1.ply'
+    # The best compression time should be from "original_3.ply" (shorter is better: 2.0)
     assert best_performance['best_compression_time'] == 'original_3.ply'
-    # The best decompression time should be from "original_3.ply" (shorter is better)
-    assert best_performance['best_decompression_time'] == 'original_3.ply'
+    # The best decompression time should be from "original_1.ply" (shorter is better: 1.0)
+    assert best_performance['best_decompression_time'] == 'original_1.ply'
 
 
 def test_aggregate_statistics(setup_experiment):
@@ -120,7 +127,8 @@ def test_aggregate_statistics(setup_experiment):
 
     # Generate the report
     output_file = os.path.join(output_dir, "experiment_report.json")
-    generate_report(experiment_results, output_file)
+    reporter = ExperimentReporter(experiment_results)
+    reporter.save_report(output_file)
 
     # Load the generated report
     with open(output_file, 'r') as f:

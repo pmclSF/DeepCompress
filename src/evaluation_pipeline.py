@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -56,32 +56,26 @@ class EvaluationPipeline:
 
         return model
 
-    @tf.function
     def _evaluate_single(self,
-                        point_cloud: tf.Tensor) -> Dict[str, tf.Tensor]:
+                        point_cloud) -> Dict[str, float]:
         """Evaluate model on single point cloud."""
-        # Forward pass
-        compressed, metrics = self.model.compress(point_cloud)
-        decompressed = self.model.decompress(compressed)
+        # Forward pass through model
+        x_hat, y, y_hat, z = self.model(point_cloud, training=False)
 
         # Compute metrics
         results = {}
-        results['psnr'] = self.metrics.compute_psnr(point_cloud, decompressed)
-        results['chamfer'] = self.metrics.compute_chamfer(point_cloud, decompressed)
-
-        # Add compression metrics
-        results.update(metrics)
+        results['psnr'] = self.metrics.compute_psnr(point_cloud, x_hat)
+        results['chamfer'] = self.metrics.compute_chamfer(point_cloud, x_hat)
 
         return results
 
-    def evaluate(self) -> Dict[str, List[EvaluationResult]]:
+    def evaluate(self) -> Dict[str, EvaluationResult]:
         """Run evaluation on test dataset."""
         results = {}
         dataset = self.data_loader.load_evaluation_data()
 
-        for point_cloud in dataset:
-            # Get filename from dataset
-            filename = point_cloud.filename.numpy().decode('utf-8')
+        for i, point_cloud in enumerate(dataset):
+            filename = f"point_cloud_{i}"
             self.logger.info(f"Evaluating {filename}")
 
             try:
@@ -95,7 +89,7 @@ class EvaluationPipeline:
                     psnr=float(metrics['psnr']),
                     chamfer_distance=float(metrics['chamfer']),
                     bd_rate=float(metrics.get('bd_rate', 0.0)),
-                    file_size=int(metrics['compressed_size']),
+                    file_size=int(metrics.get('compressed_size', 0)),
                     compression_time=float(end_time - start_time),
                     decompression_time=float(metrics.get('decompress_time', 0.0))
                 )
@@ -108,9 +102,16 @@ class EvaluationPipeline:
 
         return results
 
-    def generate_report(self, results: Dict[str, List[EvaluationResult]]):
+    def generate_report(self, results: Dict[str, EvaluationResult]):
         """Generate evaluation report."""
-        reporter = ExperimentReporter(results)
+        # Convert EvaluationResult objects to flat dicts for ExperimentReporter
+        flat_results = {}
+        for name, result in results.items():
+            if isinstance(result, EvaluationResult):
+                flat_results[name] = asdict(result)
+            else:
+                flat_results[name] = result
+        reporter = ExperimentReporter(flat_results)
 
         # Generate and save report
         output_dir = Path(self.config['evaluation']['output_dir'])

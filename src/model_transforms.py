@@ -3,7 +3,7 @@ from typing import Tuple
 
 import tensorflow as tf
 
-from constants import LOG_2_RECIPROCAL
+from constants import LOG_2_RECIPROCAL, EPSILON
 
 
 @dataclass
@@ -44,7 +44,7 @@ class CENICGDN(tf.keras.layers.Layer):
         # Use axis 4 (channel dimension) for 5D tensors (batch, D, H, W, C)
         norm = tf.tensordot(norm, self.gamma, [[4], [0]])
         norm = tf.nn.bias_add(norm, self.beta)
-        return x / norm
+        return x / tf.maximum(norm, EPSILON)
 
     def get_config(self):
         config = super().get_config()
@@ -209,6 +209,11 @@ class DeepCompressModel(tf.keras.Model):
         self.analysis = AnalysisTransform(config)
         self.synthesis = SynthesisTransform(config)
 
+        # Final projection: map from synthesis channels back to 1-channel occupancy
+        self.output_projection = tf.keras.layers.Conv3D(
+            filters=1, kernel_size=(1, 1, 1), activation='sigmoid', padding='same'
+        )
+
         # Hyperprior
         self.hyper_analysis = AnalysisTransform(TransformConfig(
             filters=config.filters // 2,
@@ -233,7 +238,7 @@ class DeepCompressModel(tf.keras.Model):
 
         # Synthesis
         y_hat = self.hyper_synthesis(z)
-        x_hat = self.synthesis(y)
+        x_hat = self.output_projection(self.synthesis(y))
 
         return x_hat, y, y_hat, z
 
@@ -288,6 +293,11 @@ class DeepCompressModelV2(tf.keras.Model):
         # Main transforms
         self.analysis = AnalysisTransform(config)
         self.synthesis = SynthesisTransform(config)
+
+        # Final projection: map from synthesis channels back to 1-channel occupancy
+        self.output_projection = tf.keras.layers.Conv3D(
+            filters=1, kernel_size=(1, 1, 1), activation='sigmoid', padding='same'
+        )
 
         # Hyperprior transforms
         self.hyper_analysis = AnalysisTransform(TransformConfig(
@@ -401,7 +411,7 @@ class DeepCompressModelV2(tf.keras.Model):
             )
 
         # Synthesis
-        x_hat = self.synthesis(y_hat)
+        x_hat = self.output_projection(self.synthesis(y_hat))
 
         # Rate information
         rate_info = {
@@ -475,7 +485,7 @@ class DeepCompressModelV2(tf.keras.Model):
             y_hat = y_compressed
 
         # Synthesis
-        x_hat = self.synthesis(y_hat)
+        x_hat = self.output_projection(self.synthesis(y_hat))
 
         return x_hat
 

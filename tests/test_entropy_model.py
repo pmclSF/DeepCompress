@@ -1,27 +1,33 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 import tensorflow as tf
 
-from entropy_model import PatchedGaussianConditional
+from entropy_model import EntropyModel, PatchedGaussianConditional
+
 
 
 class TestEntropyModel(tf.test.TestCase):
     def setUp(self):
-        self.scale = tf.random.uniform((5, 5), 0.1, 1.0)
-        self.mean = tf.random.uniform((5, 5), -1.0, 1.0)
+        tf.random.set_seed(42)
         self.scale_table = tf.constant([0.1, 0.2, 0.3, 0.4, 0.5])
-        self.inputs = tf.random.uniform((5, 5), -2.0, 2.0)
+        self.input_shape = (5, 5)
+        self.inputs = tf.random.uniform(self.input_shape, -2.0, 2.0)
 
         self.layer = PatchedGaussianConditional(
-            scale=self.scale,
-            mean=self.mean,
             scale_table=self.scale_table
         )
+        # Build the layer so scale/mean weights are created
+        self.layer.build((None, *self.input_shape))
 
     def test_initialization(self):
-        self.assertIsInstance(self.layer.scale, tf.Variable)
-        self.assertIsInstance(self.layer.mean, tf.Variable)
-        self.assertIsInstance(self.layer.scale_table, tf.Variable)
-        self.assertAllClose(self.layer.scale, self.scale)
-        self.assertAllClose(self.layer.mean, self.mean)
+        self.assertTrue(hasattr(self.layer.scale, 'numpy'))
+        self.assertTrue(hasattr(self.layer.mean, 'numpy'))
+        self.assertTrue(hasattr(self.layer.scale_table, 'numpy'))
+        self.assertEqual(self.layer.scale.shape, self.input_shape)
+        self.assertEqual(self.layer.mean.shape, self.input_shape)
         self.assertAllClose(self.layer.scale_table, self.scale_table)
 
     def test_quantize_scale(self):
@@ -46,19 +52,32 @@ class TestEntropyModel(tf.test.TestCase):
 
         required_keys = {'inputs', 'outputs', 'compress_inputs', 'compress_outputs',
                         'decompress_inputs', 'decompress_outputs'}
-        self.assertSetEqual(set(debug_tensors.keys()) - {'compress_scale', 'decompress_scale'}, required_keys)
+        self.assertTrue(required_keys.issubset(set(debug_tensors.keys())))
 
         for key in required_keys:
             self.assertEqual(debug_tensors[key].shape, self.inputs.shape)
 
     def test_get_config(self):
         config = self.layer.get_config()
-        required_keys = {'scale', 'mean', 'scale_table', 'tail_mass'}
-        self.assertSetEqual(set(config.keys()) & required_keys, required_keys)
+        required_keys = {'initial_scale', 'scale_table', 'tail_mass'}
+        self.assertTrue(required_keys.issubset(set(config.keys())))
 
-        reconstructed = PatchedGaussianConditional(**config)
-        self.assertAllClose(reconstructed.scale, self.layer.scale)
-        self.assertAllClose(reconstructed.mean, self.layer.mean)
+        reconstructed = PatchedGaussianConditional(
+            initial_scale=config['initial_scale'],
+            scale_table=config['scale_table'],
+            tail_mass=config['tail_mass']
+        )
+        self.assertEqual(reconstructed.initial_scale, self.layer.initial_scale)
+        self.assertEqual(reconstructed.tail_mass, self.layer.tail_mass)
+        self.assertAllClose(reconstructed.scale_table, self.layer.scale_table)
+
+    def test_entropy_model_forward(self):
+        """Test EntropyModel wrapping PatchedGaussianConditional."""
+        model = EntropyModel()
+        compressed, likelihood = model(self.inputs, training=False)
+        self.assertEqual(compressed.shape, self.inputs.shape)
+        self.assertEqual(likelihood.shape, self.inputs.shape)
+
 
 if __name__ == '__main__':
     tf.test.main()

@@ -114,7 +114,6 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
         quantized_flat = tf.gather(self.scale_table, indices)
         return tf.reshape(quantized_flat, original_shape)
 
-    @tf.function
     def compress(self, inputs: tf.Tensor) -> tf.Tensor:
         scale = self.quantize_scale(self.scale)
         centered = inputs - self.mean
@@ -129,7 +128,6 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
 
         return quantized
 
-    @tf.function
     def decompress(self, inputs: tf.Tensor) -> tf.Tensor:
         scale = self.quantize_scale(self.scale)
         denormalized = inputs * scale
@@ -143,7 +141,6 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
 
         return decompressed
 
-    @tf.function
     def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
         self._debug_tensors['inputs'] = inputs
         compressed = self.compress(inputs)
@@ -210,7 +207,6 @@ class ConditionalGaussian(tf.keras.layers.Layer):
             return inputs + noise
         return tf.round(inputs)
 
-    @tf.function
     def compress(self, inputs: tf.Tensor, scale: tf.Tensor, mean: tf.Tensor) -> tf.Tensor:
         """
         Compress inputs using provided scale and mean.
@@ -239,7 +235,6 @@ class ConditionalGaussian(tf.keras.layers.Layer):
 
         return quantized
 
-    @tf.function
     def decompress(self, inputs: tf.Tensor, scale: tf.Tensor, mean: tf.Tensor) -> tf.Tensor:
         """
         Decompress inputs using provided scale and mean.

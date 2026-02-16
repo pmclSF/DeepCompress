@@ -18,7 +18,6 @@ class OctreeCoder(tf.keras.layers.Layer):
         super().__init__(**kwargs)
         self.config = config
 
-    @tf.function
     def encode(self, point_cloud: tf.Tensor) -> Tuple[tf.Tensor, Dict[str, Any]]:
         """Encode point cloud into octree representation."""
         # Create empty grid
@@ -67,7 +66,6 @@ class OctreeCoder(tf.keras.layers.Layer):
 
         return grid, metadata
 
-    @tf.function
     def decode(self,
                grid: tf.Tensor,
                metadata: Dict[str, Any]) -> tf.Tensor:
@@ -88,7 +86,6 @@ class OctreeCoder(tf.keras.layers.Layer):
 
         return points
 
-    @tf.function
     def partition_octree(
         self,
         point_cloud: tf.Tensor,
@@ -96,7 +93,7 @@ class OctreeCoder(tf.keras.layers.Layer):
         level: tf.Tensor
     ) -> List[Tuple[tf.Tensor, Tuple[float, float, float, float, float, float]]]:
         """Partition point cloud into octree blocks."""
-        if tf.equal(level, 0) or tf.equal(tf.shape(point_cloud)[0], 0):
+        if level == 0 or point_cloud.shape[0] == 0:
             return [(point_cloud, bbox)]
 
         xmin, xmax, ymin, ymax, zmin, zmax = bbox
@@ -137,7 +134,7 @@ class OctreeCoder(tf.keras.layers.Layer):
             # Get points in block
             in_block = tf.boolean_mask(point_cloud, mask)
 
-            if tf.shape(in_block)[0] > 0:
+            if in_block.shape[0] > 0:
                 child_bbox = (
                     x_range[0], x_range[1],
                     y_range[0], y_range[1],

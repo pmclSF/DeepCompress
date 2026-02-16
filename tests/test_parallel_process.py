@@ -1,8 +1,12 @@
 import subprocess
+import sys
 import time
 import unittest
 from concurrent.futures import TimeoutError
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from parallel_process import Popen, ProcessResult, ProcessTimeoutError, parallel_process
 
