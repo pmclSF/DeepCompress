@@ -46,6 +46,12 @@ def calculate_metrics(predicted: np.ndarray,
                      predicted_normals: Optional[np.ndarray] = None,
                      ground_truth_normals: Optional[np.ndarray] = None,
                      use_kdtree: bool = True) -> Dict[str, float]:
+    predicted = np.asarray(predicted)
+    ground_truth = np.asarray(ground_truth)
+    if predicted_normals is not None:
+        predicted_normals = np.asarray(predicted_normals)
+    if ground_truth_normals is not None:
+        ground_truth_normals = np.asarray(ground_truth_normals)
     if predicted.size == 0 or ground_truth.size == 0:
         raise ValueError("Empty point cloud provided")
     if predicted.shape[1] != 3 or ground_truth.shape[1] != 3:

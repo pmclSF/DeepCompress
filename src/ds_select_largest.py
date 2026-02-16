@@ -16,13 +16,14 @@ def count_points_in_block(file_path):
     """
     with open(file_path, "r") as f:
         header = True
+        count = 0
         for line in f:
             if header:
                 if line.startswith("end_header"):
                     header = False
                 continue
-        # Count remaining lines
-        return sum(1 for _ in f)
+            count += 1
+        return count
 
 def prioritize_blocks(input_dir, output_dir, num_blocks, criteria="points"):
     """

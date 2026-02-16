@@ -49,6 +49,10 @@ jobs:
           tests/test_model_transforms.py \
           tests/test_integration.py \
           tests/test_performance.py \
+          tests/test_parallel_process.py \
+          tests/test_colorbar.py \
+          tests/test_entropy_model.py \
+          tests/test_octree_coding.py \
           -v --cov=src --cov-report=xml -m "not gpu and not slow"
 
     - name: Upload coverage

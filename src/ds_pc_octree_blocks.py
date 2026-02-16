@@ -29,7 +29,6 @@ class PointCloudProcessor:
         )
         return points
 
-    @tf.function
     def partition_point_cloud(self, points: tf.Tensor) -> List[tf.Tensor]:
         """Partition point cloud into blocks using TF operations."""
         # Compute bounds

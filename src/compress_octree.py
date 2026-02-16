@@ -81,6 +81,9 @@ class OctreeCompressor:
         validate: bool = True,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Compress point cloud with optional normals and validation."""
+        point_cloud = np.asarray(point_cloud)
+        if normals is not None:
+            normals = np.asarray(normals)
         if len(point_cloud) == 0:
             raise ValueError("Empty point cloud provided")
 
@@ -129,6 +132,7 @@ class OctreeCompressor:
         min_block_size: float = 0.1,
     ) -> List[Tuple[np.ndarray, Dict[str, Any]]]:
         """Partition point cloud into octree blocks."""
+        point_cloud = np.asarray(point_cloud)
         blocks = []
         min_bounds = np.min(point_cloud, axis=0)
         max_bounds = np.max(point_cloud, axis=0)
