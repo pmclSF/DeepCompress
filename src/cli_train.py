@@ -70,7 +70,7 @@ def tune_hyperparameters(input_dir, output_dir, num_epochs=10):
     best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
     print("Best Hyperparameters:", best_hps.values)
-    best_model.save(os.path.join(output_dir, 'best_model'))
+    best_model.save_weights(os.path.join(output_dir, 'best_model.weights.h5'))
 
 def main():
     parser = argparse.ArgumentParser(description="Train a point cloud compression model with hyperparameter tuning.")
@@ -94,7 +94,7 @@ def main():
         model.compile(optimizer='adam', loss='mean_squared_error')
         dataset = load_and_preprocess_data(args.input_dir, args.batch_size)
         model.fit(dataset, epochs=args.num_epochs)
-        model.save(os.path.join(args.output_dir, 'trained_model'))
+        model.save_weights(os.path.join(args.output_dir, 'trained_model.weights.h5'))
 
 if __name__ == "__main__":
     main()

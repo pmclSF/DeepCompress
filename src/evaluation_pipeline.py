@@ -52,7 +52,10 @@ class EvaluationPipeline:
         # Load weights if checkpoint provided
         checkpoint_path = self.config.get('checkpoint_path')
         if checkpoint_path:
-            model.load_weights(checkpoint_path)
+            resolved = Path(checkpoint_path).resolve()
+            if not resolved.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {resolved}")
+            model.load_weights(str(resolved))
 
         return model
 

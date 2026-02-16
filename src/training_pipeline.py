@@ -155,26 +155,27 @@ class TrainingPipeline:
 
         for opt_name, optimizer in self.optimizers.items():
             if optimizer.variables:
-                opt_weights = [v.numpy() for v in optimizer.variables]
-                np.save(
-                    str(checkpoint_path / f'{opt_name}_optimizer.npy'),
-                    np.array(opt_weights, dtype=object),
-                    allow_pickle=True,
-                )
+                opt_dir = checkpoint_path / f'{opt_name}_optimizer'
+                opt_dir.mkdir(parents=True, exist_ok=True)
+                for i, v in enumerate(optimizer.variables):
+                    np.save(str(opt_dir / f'{i}.npy'), v.numpy())
 
         self.logger.info(f"Saved checkpoint: {name}")
 
     def load_checkpoint(self, name: str):
-        checkpoint_path = self.checkpoint_dir / name
+        checkpoint_path = (self.checkpoint_dir / name).resolve()
+        if not str(checkpoint_path).startswith(str(self.checkpoint_dir.resolve())):
+            raise ValueError(f"Checkpoint path escapes checkpoint directory: {name}")
         self.model.load_weights(str(checkpoint_path / 'model.weights.h5'))
         self.entropy_model.load_weights(str(checkpoint_path / 'entropy.weights.h5'))
 
         for opt_name, optimizer in self.optimizers.items():
-            opt_path = checkpoint_path / f'{opt_name}_optimizer.npy'
-            if opt_path.exists() and optimizer.variables:
-                opt_weights = np.load(str(opt_path), allow_pickle=True)
-                for var, w in zip(optimizer.variables, opt_weights):
-                    var.assign(w)
+            opt_dir = checkpoint_path / f'{opt_name}_optimizer'
+            if opt_dir.exists() and optimizer.variables:
+                for i, var in enumerate(optimizer.variables):
+                    path = opt_dir / f'{i}.npy'
+                    if path.exists():
+                        var.assign(np.load(str(path), allow_pickle=False))
 
         self.logger.info(f"Loaded checkpoint: {name}")
 

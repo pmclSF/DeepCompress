@@ -99,6 +99,11 @@ class TestTrainingPipeline:
         checkpoint_dir = Path(pipeline.checkpoint_dir) / checkpoint_name
         assert (checkpoint_dir / 'model.weights.h5').exists()
         assert (checkpoint_dir / 'entropy.weights.h5').exists()
+        # Optimizer variables saved as individual .npy files in subdirectories
+        for opt_name in pipeline.optimizers:
+            opt_dir = checkpoint_dir / f'{opt_name}_optimizer'
+            if pipeline.optimizers[opt_name].variables:
+                assert opt_dir.exists()
 
         new_pipeline = TrainingPipeline(pipeline.config_path)
         # Build the new model before loading weights
