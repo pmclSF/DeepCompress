@@ -8,7 +8,6 @@ import tensorflow as tf
 from entropy_model import EntropyModel, PatchedGaussianConditional
 
 
-
 class TestEntropyModel(tf.test.TestCase):
     def setUp(self):
         tf.random.set_seed(42)

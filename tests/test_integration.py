@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from data_loader import DataLoader
 from evaluation_pipeline import EvaluationPipeline
 from model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
-from test_utils import create_mock_point_cloud, create_mock_voxel_grid, create_test_dataset, setup_test_environment
+from test_utils import create_mock_point_cloud, create_mock_voxel_grid, setup_test_environment
 from training_pipeline import TrainingPipeline
 
 
