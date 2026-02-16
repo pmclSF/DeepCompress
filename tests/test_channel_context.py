@@ -1,13 +1,14 @@
 """Tests for channel-wise context model."""
 
-import tensorflow as tf
 import sys
 from pathlib import Path
+
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from channel_context import SliceTransform, ChannelContext, ChannelContextEntropyModel
+from channel_context import ChannelContext, ChannelContextEntropyModel, SliceTransform
 
 
 class TestSliceTransform(tf.test.TestCase):

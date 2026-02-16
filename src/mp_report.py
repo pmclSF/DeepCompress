@@ -1,10 +1,11 @@
-import tensorflow as tf
 import json
-import os
-from typing import Dict, Any, List
-from pathlib import Path
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict
+
+import tensorflow as tf
+
 
 @dataclass
 class ExperimentMetrics:
@@ -18,12 +19,12 @@ class ExperimentMetrics:
 
 class ExperimentReporter:
     """Reporter for compression experiments."""
-    
+
     def __init__(self, experiment_results: Dict[str, Any]):
         self.experiment_results = experiment_results
         self.summary = self._initialize_summary()
         self.logger = logging.getLogger(__name__)
-        
+
     def _initialize_summary(self) -> Dict[str, Any]:
         """Initialize summary metrics."""
         return {
@@ -34,34 +35,34 @@ class ExperimentReporter:
                 'timestamp': self.experiment_results.get('timestamp', 'N/A')
             }
         }
-        
+
     @tf.function
     def compute_aggregate_metrics(self) -> Dict[str, tf.Tensor]:
         """Compute aggregate metrics using TensorFlow operations."""
         metrics = []
-        
+
         for file_name, results in self.experiment_results.items():
             if file_name in ['timestamp', 'octree_levels', 'quantization_levels']:
                 continue
-                
+
             if all(key in results for key in ['psnr', 'bd_rate', 'bitrate']):
                 metrics.append([
                     results['psnr'],
                     results['bd_rate'],
                     results['bitrate']
                 ])
-        
+
         if not metrics:
             return {}
-            
+
         metrics_tensor = tf.convert_to_tensor(metrics, dtype=tf.float32)
-        
+
         return {
             'avg_psnr': tf.reduce_mean(metrics_tensor[:, 0]),
             'avg_bd_rate': tf.reduce_mean(metrics_tensor[:, 1]),
             'avg_bitrate': tf.reduce_mean(metrics_tensor[:, 2])
         }
-        
+
     def _compute_best_metrics(self) -> Dict[str, Any]:
         """Compute best metrics across all experiments."""
         best_metrics = {
@@ -72,7 +73,7 @@ class ExperimentReporter:
             'compression_time': float('inf'),
             'decompression_time': float('inf')
         }
-        
+
         best_models = {
             'psnr': None,
             'bd_rate': None,
@@ -81,11 +82,11 @@ class ExperimentReporter:
             'compression_time': None,
             'decompression_time': None
         }
-        
+
         for file_name, results in self.experiment_results.items():
             if file_name in ['timestamp', 'octree_levels', 'quantization_levels']:
                 continue
-                
+
             # Update best metrics
             for metric in best_metrics.keys():
                 if metric in results:
@@ -98,7 +99,7 @@ class ExperimentReporter:
                         if value < best_metrics[metric]:
                             best_metrics[metric] = value
                             best_models[metric] = file_name
-        
+
         return {
             'metrics': best_metrics,
             'models': best_models
@@ -170,10 +171,10 @@ class ExperimentReporter:
         report = self.generate_report()
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(output_path, 'w') as f:
             json.dump(report, f, indent=4)
-            
+
         self.logger.info(f"Report saved to {output_file}")
 
 def load_experiment_results(input_file: str) -> Dict[str, Any]:
@@ -188,7 +189,7 @@ def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger(__name__)
-    
+
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser(description="Generate experiment report")
@@ -203,13 +204,13 @@ def main():
         help="Path to save the generated report"
     )
     args = parser.parse_args()
-    
+
     try:
         # Load results and generate report
         results = load_experiment_results(args.input_file)
         reporter = ExperimentReporter(results)
         reporter.save_report(args.output_file)
-        
+
     except Exception as e:
         logger.error(f"Error generating report: {str(e)}", exc_info=True)
         raise

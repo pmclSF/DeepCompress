@@ -1,18 +1,19 @@
 """Tests for attention-based context model."""
 
-import tensorflow as tf
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from attention_context import (
-    SparseAttention3D,
-    BidirectionalMaskTransformer,
     AttentionEntropyModel,
-    HybridAttentionEntropyModel
+    BidirectionalMaskTransformer,
+    HybridAttentionEntropyModel,
+    SparseAttention3D,
 )
 
 

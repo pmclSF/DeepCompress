@@ -1,6 +1,8 @@
-import os
 import argparse
+import os
+
 import tensorflow as tf
+
 
 def count_points_in_block(file_path):
     """

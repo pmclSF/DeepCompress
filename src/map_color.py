@@ -1,7 +1,8 @@
-import numpy as np
 import argparse
-from pathlib import Path
 from typing import Optional
+
+import numpy as np
+
 
 def load_point_cloud(file_path: str) -> Optional[np.ndarray]:
     """

@@ -1,6 +1,7 @@
-import tensorflow as tf
-from typing import Tuple
 from dataclasses import dataclass
+from typing import Tuple
+
+import tensorflow as tf
 
 from constants import LOG_2_RECIPROCAL, EPSILON
 

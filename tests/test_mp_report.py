@@ -1,9 +1,10 @@
-import sys
-import pytest
-import os
 import json
+import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 

@@ -1,22 +1,18 @@
-import tensorflow as tf
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+import tensorflow as tf
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from test_utils import (
-    setup_test_environment,
-    create_mock_point_cloud,
-    create_mock_voxel_grid,
-    create_test_dataset
-)
-from training_pipeline import TrainingPipeline
-from evaluation_pipeline import EvaluationPipeline
 from data_loader import DataLoader
+from evaluation_pipeline import EvaluationPipeline
 from model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
+from test_utils import create_mock_point_cloud, create_mock_voxel_grid, create_test_dataset, setup_test_environment
+from training_pipeline import TrainingPipeline
+
 
 class TestIntegration(tf.test.TestCase):
     @pytest.fixture(autouse=True)
