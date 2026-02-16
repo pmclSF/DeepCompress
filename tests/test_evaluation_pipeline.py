@@ -102,5 +102,63 @@ class TestEvaluationPipeline:
         assert 'aggregate_metrics' in report_data
         assert len(report_data['model_performance']) == len(results)
 
+    def test_load_model_no_checkpoint_configured(self, config_path):
+        """Pipeline initializes when config has no checkpoint_path."""
+        pipeline = EvaluationPipeline(config_path)
+        assert pipeline.model is not None
+        assert pipeline.config.get('checkpoint_path') is None
+
+    def test_load_model_empty_string_checkpoint(self, tmp_path):
+        """Empty string checkpoint_path is treated as no checkpoint."""
+        config = {
+            'data': {
+                'modelnet40_path': str(tmp_path / 'modelnet40'),
+                'ivfb_path': str(tmp_path / '8ivfb')
+            },
+            'model': {
+                'filters': 32,
+                'activation': 'cenic_gdn',
+                'conv_type': 'separable'
+            },
+            'evaluation': {
+                'metrics': ['psnr'],
+                'output_dir': str(tmp_path / 'results'),
+                'visualize': True
+            },
+            'checkpoint_path': ''
+        }
+        config_file = tmp_path / 'config_empty_ckpt.yml'
+        with open(config_file, 'w') as f:
+            yaml.dump(config, f)
+
+        pipeline = EvaluationPipeline(str(config_file))
+        assert pipeline.model is not None
+
+    def test_load_model_missing_checkpoint_raises(self, tmp_path):
+        """Non-existent checkpoint_path raises FileNotFoundError."""
+        config = {
+            'data': {
+                'modelnet40_path': str(tmp_path / 'modelnet40'),
+                'ivfb_path': str(tmp_path / '8ivfb')
+            },
+            'model': {
+                'filters': 32,
+                'activation': 'cenic_gdn',
+                'conv_type': 'separable'
+            },
+            'evaluation': {
+                'metrics': ['psnr'],
+                'output_dir': str(tmp_path / 'results'),
+                'visualize': True
+            },
+            'checkpoint_path': str(tmp_path / 'nonexistent' / 'model.weights.h5')
+        }
+        config_file = tmp_path / 'config_missing_ckpt.yml'
+        with open(config_file, 'w') as f:
+            yaml.dump(config, f)
+
+        with pytest.raises(FileNotFoundError, match="Checkpoint not found"):
+            EvaluationPipeline(str(config_file))
+
 if __name__ == '__main__':
     tf.test.main()
