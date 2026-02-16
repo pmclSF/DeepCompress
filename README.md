@@ -552,8 +552,9 @@ print(f"Peak memory: {mem.peak_mb:.1f} MB")
 
 | Software | Version | Purpose |
 |----------|---------|---------|
-| Python | 3.8+ | Programming language |
-| TensorFlow | ≥ 2.11.0 | Neural network framework |
+| Python | 3.10+ | Programming language |
+| TensorFlow | ~=2.15 | Neural network framework |
+| TensorFlow Probability | ~=0.23 | Probability distributions for entropy modeling |
 | MPEG G-PCC | Latest | Industry-standard codec for comparison |
 | MPEG PCC Metrics | v0.12.3 | Standard evaluation metrics |
 
@@ -561,16 +562,17 @@ print(f"Peak memory: {mem.peak_mb:.1f} MB")
 
 Install these with `pip install -r requirements.txt`:
 
-| Package | Purpose |
-|---------|---------|
-| tensorflow | Neural network operations |
-| tensorflow-probability | Probability distributions for entropy modeling |
-| numpy | Numerical computations |
-| matplotlib | Visualization |
-| pandas | Data analysis |
-| pyyaml | Configuration file parsing |
-| scipy | Scientific computing |
-| numba | JIT compilation for speed |
+| Package | Version | Purpose |
+|---------|---------|---------|
+| tensorflow | ~=2.15 | Neural network operations |
+| tensorflow-probability | ~=0.23 | Probability distributions for entropy modeling |
+| numpy | ~=1.26 | Numerical computations |
+| matplotlib | ~=3.8 | Visualization |
+| pandas | ~=2.1 | Data analysis |
+| pyyaml | ~=6.0 | Configuration file parsing |
+| scipy | ~=1.11 | Scientific computing |
+| numba | ~=0.58 | JIT compilation for speed |
+| keras-tuner | ~=1.4 | Hyperparameter tuning (for cli_train.py) |
 
 ---
 
@@ -578,43 +580,65 @@ Install these with `pip install -r requirements.txt`:
 
 ```
 deepcompress/
-├── src/                          # Source code
+├── src/                            # Source code
 │   ├── Model Components
-│   │   ├── model_transforms.py   # Main encoder/decoder architecture
-│   │   ├── entropy_model.py      # Entropy coding (converts to bits)
-│   │   ├── entropy_parameters.py # Hyperprior parameter prediction
-│   │   ├── context_model.py      # Spatial autoregressive context
-│   │   ├── channel_context.py    # Channel-wise context
-│   │   └── attention_context.py  # Attention-based context
+│   │   ├── model_transforms.py     # Main encoder/decoder (V1 + V2) architecture
+│   │   ├── entropy_model.py        # Gaussian conditional, hyperprior entropy models
+│   │   ├── entropy_parameters.py   # Hyperprior mean/scale prediction network
+│   │   ├── context_model.py        # MaskedConv3D, autoregressive spatial context
+│   │   ├── channel_context.py      # Channel-wise context model
+│   │   └── attention_context.py    # Windowed attention context model
 │   │
 │   ├── Performance
-│   │   ├── constants.py          # Pre-computed math constants
-│   │   ├── precision_config.py   # Mixed precision settings
-│   │   ├── benchmarks.py         # Performance measurement
-│   │   └── quick_benchmark.py    # Quick testing tool
+│   │   ├── constants.py            # Pre-computed math constants (LOG_2, EPSILON)
+│   │   ├── precision_config.py     # Mixed precision (float16) settings
+│   │   ├── benchmarks.py           # Performance measurement
+│   │   └── quick_benchmark.py      # Quick synthetic smoke test
 │   │
 │   ├── Data Processing
-│   │   ├── ds_mesh_to_pc.py      # Convert meshes to point clouds
-│   │   ├── ds_pc_octree_blocks.py# Split into octree blocks
-│   │   ├── compress_octree.py    # Compression pipeline
-│   │   └── decompress_octree.py  # Decompression pipeline
+│   │   ├── data_loader.py          # Unified data loader (ModelNet40 / 8iVFB)
+│   │   ├── ds_mesh_to_pc.py        # Convert .off meshes to point clouds
+│   │   ├── ds_pc_octree_blocks.py  # Split point clouds into octree blocks
+│   │   ├── ds_select_largest.py    # Select N largest blocks by point count
+│   │   ├── octree_coding.py        # Octree encode/decode for voxel grids
+│   │   ├── compress_octree.py      # Compression entry point
+│   │   └── map_color.py            # Transfer colors between point clouds
 │   │
-│   └── Training & Evaluation
-│       ├── training_pipeline.py  # End-to-end training
-│       ├── evaluation_pipeline.py# Model evaluation
-│       └── cli_train.py          # Command-line interface
+│   ├── Training & Evaluation
+│   │   ├── training_pipeline.py    # End-to-end training loop
+│   │   ├── evaluation_pipeline.py  # Model evaluation pipeline
+│   │   ├── cli_train.py            # Training CLI with hyperparameter tuning
+│   │   └── experiment.py           # Experiment runner
+│   │
+│   └── Evaluation & Comparison
+│       ├── ev_compare.py           # Point cloud quality metrics (PSNR, Chamfer)
+│       ├── ev_run_render.py        # Visualization / rendering
+│       ├── point_cloud_metrics.py  # D1/D2 point-to-point metrics
+│       ├── mp_report.py            # MPEG G-PCC comparison reports
+│       ├── colorbar.py             # Colorbar visualization utility
+│       └── parallel_process.py     # Parallel processing utility
 │
-├── tests/                        # Automated tests
-│   ├── test_entropy_model.py
-│   ├── test_context_model.py
-│   ├── test_performance.py       # Performance regression tests
-│   └── ...
+├── tests/                          # Automated tests (pytest + tf.test.TestCase)
+│   ├── conftest.py                 # Session-scoped fixtures (tf_config, file factories)
+│   ├── test_utils.py               # Shared test utilities (mock grids, configs)
+│   ├── test_model_transforms.py    # V1 + V2 model tests
+│   ├── test_entropy_model.py       # Entropy model tests
+│   ├── test_context_model.py       # Context model tests
+│   ├── test_channel_context.py     # Channel context tests
+│   ├── test_attention_context.py   # Attention context tests
+│   ├── test_performance.py         # Performance regression + optimization tests
+│   ├── test_training_pipeline.py   # Training loop tests
+│   ├── test_evaluation_pipeline.py # Evaluation pipeline tests
+│   ├── test_data_loader.py         # Data loading tests
+│   ├── test_compress_octree.py     # Compression pipeline tests
+│   ├── test_octree_coding.py       # Octree codec tests
+│   └── ...                         # + 10 more module-level test files
 │
-├── config/                       # Configuration files
-├── data/                         # Datasets (not in git)
-├── results/                      # Output files (not in git)
-├── README.md                     # This file
-└── requirements.txt              # Python dependencies
+├── data/                           # Datasets (not in git)
+├── results/                        # Output files (not in git)
+├── pytest.ini                      # Pytest configuration and markers
+├── README.md                       # This file
+└── requirements.txt                # Python dependencies
 ```
 
 ---
