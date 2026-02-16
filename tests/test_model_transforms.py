@@ -61,7 +61,7 @@ class TestModelTransforms(tf.test.TestCase):
         analysis = AnalysisTransform(self.config)
         input_tensor = create_mock_voxel_grid(self.resolution, self.batch_size)
         output = analysis(input_tensor)
-        self.assertIsNotNone(output)
+        self.assertEqual(len(output.shape), 5)  # 5D tensor (B, D, H, W, C)
         self.assertGreater(output.shape[-1], input_tensor.shape[-1])
         # Check that CENICGDN layers are present in the conv_layers list
         has_gdn = any(isinstance(layer, CENICGDN) for layer in analysis.conv_layers)
@@ -72,7 +72,7 @@ class TestModelTransforms(tf.test.TestCase):
         input_tensor = tf.random.uniform((2, 32, 32, 32, 256))  # Match analysis output channels
         output = synthesis(input_tensor)
         # Synthesis reduces channels progressively
-        self.assertIsNotNone(output)
+        self.assertEqual(len(output.shape), 5)  # 5D tensor
         self.assertLessEqual(output.shape[-1], input_tensor.shape[-1])
 
     def test_deep_compress_model(self):
@@ -91,11 +91,11 @@ class TestModelTransforms(tf.test.TestCase):
         self.assertIsInstance(output, tuple)
         self.assertEqual(len(output), 4)
         x_hat, y, y_hat, z = output
-        # Check that output tensors are valid
-        self.assertIsNotNone(x_hat)
-        self.assertIsNotNone(y)
-        self.assertIsNotNone(y_hat)
-        self.assertIsNotNone(z)
+        # Check that output tensors have correct shapes
+        self.assertEqual(x_hat.shape[:-1], input_tensor.shape[:-1])
+        self.assertEqual(len(y.shape), 5)
+        self.assertEqual(len(y_hat.shape), 5)
+        self.assertEqual(len(z.shape), 5)
 
     def test_gradient_flow(self):
         model = DeepCompressModel(self.config)

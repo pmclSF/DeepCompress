@@ -59,8 +59,8 @@ class TestSparseAttention3D(tf.test.TestCase):
         """Global tokens are learnable."""
         self.layer.build(self.inputs.shape)
 
-        # Global tokens should exist
-        self.assertIsNotNone(self.layer.global_tokens)
+        # Global tokens should have correct shape
+        self.assertEqual(self.layer.global_tokens.shape[-1], self.dim)
         self.assertEqual(
             self.layer.global_tokens.shape,
             (1, self.layer.num_global_tokens, self.dim)
@@ -257,8 +257,8 @@ class TestHybridAttentionEntropyModel(tf.test.TestCase):
     def test_hybrid_combines_all_context(self):
         """Hybrid model uses all context types."""
         # Model should have components from all context types
-        self.assertIsNotNone(self.model.entropy_parameters)
-        self.assertIsNotNone(self.model.channel_context)
+        self.assertIsInstance(self.model.entropy_parameters, tf.keras.layers.Layer)
+        self.assertIsInstance(self.model.channel_context, tf.keras.layers.Layer)
         self.assertNotEmpty(self.model.attention_contexts)
 
 

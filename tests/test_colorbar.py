@@ -1,9 +1,13 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
 import pytest
 import numpy as np
 import matplotlib.pyplot as plt
 import json
-from pathlib import Path
-from colorbar import get_colorbar, ColorbarGenerator, ColorbarConfig
+from colorbar import get_colorbar, ColorbarConfig
 
 class TestColorbar:
     """Test suite for colorbar generation and color mapping functionality."""
@@ -17,7 +21,7 @@ class TestColorbar:
 
     def test_horizontal_colorbar(self):
         fig, cmap = get_colorbar(self.vmin, self.vmax, orientation='horizontal')
-        assert fig is not None
+        assert len(fig.axes) > 0
         assert callable(cmap)
         
         test_values = [0, 50, 100]
@@ -27,7 +31,7 @@ class TestColorbar:
 
     def test_vertical_colorbar(self):
         fig, cmap = get_colorbar(self.vmin, self.vmax, orientation='vertical')
-        assert fig is not None
+        assert len(fig.axes) > 0
         assert callable(cmap)
         assert tuple(fig.get_size_inches()) == (1.0, 6)
 
@@ -42,7 +46,7 @@ class TestColorbar:
             tick_positions=positions
         )
         
-        cbar_ax = next(obj for obj in fig.get_children() if isinstance(obj, plt.Axes))
+        cbar_ax = fig.axes[-1]
         tick_labels = [t.get_text() for t in cbar_ax.get_xticklabels()]
         assert tick_labels == labels
 
@@ -56,7 +60,7 @@ class TestColorbar:
             tick_rotation=45
         )
         
-        cbar_ax = next(obj for obj in fig.get_children() if isinstance(obj, plt.Axes))
+        cbar_ax = fig.axes[-1]
         assert cbar_ax.get_xlabel() == title
         assert all(t.get_rotation() == 45 for t in cbar_ax.get_xticklabels())
 
