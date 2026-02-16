@@ -95,25 +95,25 @@ class TestConstants:
 
     def test_get_log2_constant_f32(self, tf_setup):
         """Verify get_log2_constant returns LOG_2 for default dtype."""
-        from constants import get_log2_constant, LOG_2
+        from constants import LOG_2, get_log2_constant
         result = get_log2_constant()
         assert result is LOG_2
 
     def test_get_log2_constant_f16(self, tf_setup):
         """Verify get_log2_constant returns LOG_2_F16 for float16."""
-        from constants import get_log2_constant, LOG_2_F16
+        from constants import LOG_2_F16, get_log2_constant
         result = get_log2_constant(tf.float16)
         assert result is LOG_2_F16
 
     def test_get_log2_reciprocal_f32(self, tf_setup):
         """Verify get_log2_reciprocal returns LOG_2_RECIPROCAL for default dtype."""
-        from constants import get_log2_reciprocal, LOG_2_RECIPROCAL
+        from constants import LOG_2_RECIPROCAL, get_log2_reciprocal
         result = get_log2_reciprocal()
         assert result is LOG_2_RECIPROCAL
 
     def test_get_log2_reciprocal_f16(self, tf_setup):
         """Verify get_log2_reciprocal returns LOG_2_RECIPROCAL_F16 for float16."""
-        from constants import get_log2_reciprocal, LOG_2_RECIPROCAL_F16
+        from constants import LOG_2_RECIPROCAL_F16, get_log2_reciprocal
         result = get_log2_reciprocal(tf.float16)
         assert result is LOG_2_RECIPROCAL_F16
 
@@ -363,8 +363,9 @@ class TestPrecisionConfig:
 
     def test_configure_mixed_float16_warns_on_cpu(self, tf_setup):
         """Verify UserWarning when enabling float16 on CPU."""
-        from precision_config import PrecisionManager
         import warnings as w
+
+        from precision_config import PrecisionManager
 
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:

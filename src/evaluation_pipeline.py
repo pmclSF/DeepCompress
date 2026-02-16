@@ -1,7 +1,7 @@
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import tensorflow as tf
 

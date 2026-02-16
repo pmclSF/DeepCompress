@@ -5,7 +5,6 @@ import pytest
 import tensorflow as tf
 
 
-
 def pytest_collection_modifyitems(items):
     """Filter out tf.test.TestCase.test_session, which is a deprecated
     context manager that pytest mistakenly collects as a test."""

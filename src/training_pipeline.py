@@ -9,9 +9,10 @@ import tensorflow as tf
 class TrainingPipeline:
     def __init__(self, config_path: str):
         import yaml
+
         from data_loader import DataLoader
-        from model_transforms import DeepCompressModel, TransformConfig
         from entropy_model import EntropyModel
+        from model_transforms import DeepCompressModel, TransformConfig
 
         self.config_path = config_path
         with open(config_path, 'r') as f:
@@ -50,7 +51,8 @@ class TrainingPipeline:
     def _train_step(self, batch: tf.Tensor, training: bool = True) -> Dict[str, tf.Tensor]:
         """Run a single training step."""
         with tf.GradientTape(persistent=True) as tape:
-            x_hat, y, y_hat, z = self.model(batch[..., tf.newaxis] if len(batch.shape) == 4 else batch, training=training)
+            inputs = batch[..., tf.newaxis] if len(batch.shape) == 4 else batch
+            x_hat, y, y_hat, z = self.model(inputs, training=training)
 
             # Compute focal loss on reconstruction
             focal_loss = self.compute_focal_loss(
