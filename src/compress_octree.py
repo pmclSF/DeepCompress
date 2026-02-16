@@ -181,12 +181,13 @@ class OctreeCompressor:
         os.makedirs(debug_dir, exist_ok=True)
 
         for name, array in data.items():
-            if isinstance(array, (np.ndarray, dict)):
+            if isinstance(array, np.ndarray):
                 np.save(os.path.join(debug_dir, f"{name}.npy"), array)
 
     def save_compressed(self, grid: np.ndarray, metadata: Dict[str, Any], filename: str) -> None:
         """Save compressed data with metadata."""
         import json
+        import math
 
         os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
         # Save grid without pickle (bool array, no object dtype)
@@ -198,7 +199,13 @@ class OctreeCompressor:
             if isinstance(v, np.ndarray):
                 serializable[k] = v.tolist()
             elif isinstance(v, (np.floating, np.integer)):
-                serializable[k] = v.item()
+                val = v.item()
+                if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                    serializable[k] = None
+                else:
+                    serializable[k] = val
+            elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                serializable[k] = None
             else:
                 serializable[k] = v
         with open(meta_path, 'w') as f:

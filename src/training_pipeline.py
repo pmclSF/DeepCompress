@@ -164,7 +164,9 @@ class TrainingPipeline:
 
     def load_checkpoint(self, name: str):
         checkpoint_path = (self.checkpoint_dir / name).resolve()
-        if not str(checkpoint_path).startswith(str(self.checkpoint_dir.resolve())):
+        try:
+            checkpoint_path.relative_to(self.checkpoint_dir.resolve())
+        except ValueError:
             raise ValueError(f"Checkpoint path escapes checkpoint directory: {name}")
         self.model.load_weights(str(checkpoint_path / 'model.weights.h5'))
         self.entropy_model.load_weights(str(checkpoint_path / 'entropy.weights.h5'))
