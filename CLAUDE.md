@@ -311,9 +311,12 @@ When adding new code, follow the convention of the file you're editing.
 - The codebase uses `typing` annotations (`Optional`, `Dict`, `Tuple`, etc.) in function signatures.
 - Follow existing style. Don't add type annotations to existing functions that don't have them unless asked.
 
+### Package Management
+
+**Package management:** This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Always commit `uv.lock` — it ensures reproducible builds across environments. Do not create `requirements.txt` or `setup.py` files.
+
 ### Things Not to Add Unless Asked
 
-- New dependencies in `requirements.txt`
 - New base classes, ABCs, or mixin layers
 - README updates to match code changes (the README describes some aspirational features)
 
@@ -334,26 +337,27 @@ These are pre-existing issues in the codebase. Do not fix them unless specifical
 ## Quick Reference
 
 ```bash
-# Lint (must pass before commit)
-ruff check src/ tests/
+# Install dependencies
+uv sync --dev
 
-# Auto-fix import order and whitespace
-ruff check --fix src/ tests/
-
-# Run all tests
-pytest tests/ -v
+# Run tests
+uv run pytest tests/ -v -m "not slow and not gpu"
 
 # Run one test file
-pytest tests/test_entropy_model.py -v
+uv run pytest tests/test_entropy_model.py -v
 
-# Skip slow tests
-pytest tests/ -v -m "not slow"
+# Lint
+uv run ruff check src/ tests/
+uv run ruff check --fix src/ tests/
 
-# Run only GPU tests
-pytest tests/ -v -m gpu
+# Add a new dependency
+uv add <package>
+
+# Add a dev dependency
+uv add --dev <package>
 
 # Quick smoke test (no data needed)
-python -m src.quick_benchmark --compare
+uv run python -m src.quick_benchmark --compare
 ```
 
 ### Repository Layout
