@@ -153,13 +153,15 @@ class OctreeCompressor:
                     mid[i] if octant[i] == 0 else bounds[1][i] for i in range(3)
                 ])
 
-                # Find points in this octant with epsilon for stability
-                epsilon = 1e-10
-                mask = np.all(
-                    (points >= min_corner - epsilon) &
-                    (points <= max_corner + epsilon),
-                    axis=1
-                )
+                # Half-open intervals: [min, mid) for lower, [mid, max] for upper
+                lower_cond = points >= min_corner
+                upper_cond = np.array([
+                    points[:, i] <= max_corner[i]
+                    if octant[i] == 1  # upper half: inclusive
+                    else points[:, i] < max_corner[i]  # lower half: exclusive
+                    for i in range(3)
+                ]).T
+                mask = np.all(lower_cond & upper_cond, axis=1)
                 if np.any(mask):
                     partition_recursive(points[mask], (min_corner, max_corner))
 

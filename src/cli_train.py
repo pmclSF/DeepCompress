@@ -5,7 +5,7 @@ import os
 import keras_tuner as kt
 import tensorflow as tf
 
-from .ds_mesh_to_pc import read_off
+from .file_io import read_point_cloud
 
 
 def create_model(hp):
@@ -32,8 +32,10 @@ def load_and_preprocess_data(input_dir, batch_size):
     file_paths = glob.glob(os.path.join(input_dir, "*.ply"))
 
     def parse_ply_file(file_path):
-        mesh_data = read_off(file_path)
-        return mesh_data.vertices
+        vertices = read_point_cloud(file_path)
+        if vertices is None:
+            raise ValueError(f"Failed to read point cloud: {file_path}")
+        return vertices
 
     def data_generator():
         for file_path in file_paths:

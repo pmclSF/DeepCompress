@@ -114,18 +114,33 @@ class OctreeCoder(tf.keras.layers.Layer):
         ]
 
         for x_range, y_range, z_range in ranges:
-            # Compute conditions
+            # Half-open intervals: [min, mid) for lower half, [mid, max] for upper
+            x_upper_cond = (
+                point_cloud[:, 0] <= x_range[1]
+                if x_range[1] == xmax
+                else point_cloud[:, 0] < x_range[1]
+            )
             x_cond = tf.logical_and(
-                point_cloud[:, 0] >= x_range[0] - self.config.epsilon,
-                point_cloud[:, 0] <= x_range[1] + self.config.epsilon
+                point_cloud[:, 0] >= x_range[0],
+                x_upper_cond
+            )
+            y_upper_cond = (
+                point_cloud[:, 1] <= y_range[1]
+                if y_range[1] == ymax
+                else point_cloud[:, 1] < y_range[1]
             )
             y_cond = tf.logical_and(
-                point_cloud[:, 1] >= y_range[0] - self.config.epsilon,
-                point_cloud[:, 1] <= y_range[1] + self.config.epsilon
+                point_cloud[:, 1] >= y_range[0],
+                y_upper_cond
+            )
+            z_upper_cond = (
+                point_cloud[:, 2] <= z_range[1]
+                if z_range[1] == zmax
+                else point_cloud[:, 2] < z_range[1]
             )
             z_cond = tf.logical_and(
-                point_cloud[:, 2] >= z_range[0] - self.config.epsilon,
-                point_cloud[:, 2] <= z_range[1] + self.config.epsilon
+                point_cloud[:, 2] >= z_range[0],
+                z_upper_cond
             )
 
             # Combine conditions

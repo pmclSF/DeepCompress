@@ -23,5 +23,5 @@ known-first-party = [
     "ev_compare", "ev_run_render", "mp_report", "mp_run",
     "quick_benchmark", "benchmarks", "parallel_process",
     "point_cloud_metrics", "map_color", "colorbar",
-    "cli_train", "test_utils",
+    "cli_train", "file_io", "test_utils",
 ]

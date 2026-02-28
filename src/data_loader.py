@@ -5,8 +5,8 @@ from typing import Any, Dict
 import numpy as np
 import tensorflow as tf
 
-from .ds_mesh_to_pc import read_off
 from .ds_pc_octree_blocks import PointCloudProcessor
+from .file_io import read_point_cloud
 
 
 class DataLoader:
@@ -22,8 +22,10 @@ class DataLoader:
     def process_point_cloud(self, file_path: str) -> tf.Tensor:
         """Process a single point cloud file."""
         # Read point cloud
-        mesh_data = read_off(file_path.numpy().decode())
-        points = tf.convert_to_tensor(mesh_data.vertices, dtype=tf.float32)
+        vertices = read_point_cloud(file_path.numpy().decode())
+        if vertices is None:
+            raise ValueError(f"Failed to read point cloud: {file_path}")
+        points = tf.convert_to_tensor(vertices, dtype=tf.float32)
 
         # Normalize points to unit cube
         points = self._normalize_points(points)
@@ -43,7 +45,7 @@ class DataLoader:
         """Normalize points to unit cube."""
         center = tf.reduce_mean(points, axis=0)
         points = points - center
-        scale = tf.reduce_max(tf.abs(points))
+        scale = tf.maximum(tf.reduce_max(tf.abs(points)), 1e-8)
         points = points / scale
         return points
 
