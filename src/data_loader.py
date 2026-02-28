@@ -5,8 +5,8 @@ from typing import Any, Dict
 import numpy as np
 import tensorflow as tf
 
-from ds_mesh_to_pc import read_off
-from ds_pc_octree_blocks import PointCloudProcessor
+from .ds_mesh_to_pc import read_off
+from .ds_pc_octree_blocks import PointCloudProcessor
 
 
 class DataLoader:

@@ -3,7 +3,7 @@ from typing import Tuple
 
 import tensorflow as tf
 
-from constants import EPSILON, LOG_2_RECIPROCAL
+from .constants import EPSILON, LOG_2_RECIPROCAL
 
 
 @dataclass
@@ -322,25 +322,25 @@ class DeepCompressModelV2(tf.keras.Model):
     def _create_entropy_model(self):
         """Create the selected entropy model."""
         if self.entropy_model_type == 'gaussian':
-            from entropy_model import EntropyModel
+            from .entropy_model import EntropyModel
             self.entropy_module = EntropyModel()
 
         elif self.entropy_model_type == 'hyperprior':
-            from entropy_model import MeanScaleHyperprior
+            from .entropy_model import MeanScaleHyperprior
             self.entropy_module = MeanScaleHyperprior(
                 latent_channels=self.latent_channels,
                 hyper_channels=self.hyper_channels
             )
 
         elif self.entropy_model_type == 'context':
-            from context_model import ContextualEntropyModel
+            from .context_model import ContextualEntropyModel
             self.entropy_module = ContextualEntropyModel(
                 latent_channels=self.latent_channels,
                 hyper_channels=self.hyper_channels
             )
 
         elif self.entropy_model_type == 'channel':
-            from channel_context import ChannelContextEntropyModel
+            from .channel_context import ChannelContextEntropyModel
             self.entropy_module = ChannelContextEntropyModel(
                 latent_channels=self.latent_channels,
                 hyper_channels=self.hyper_channels,
@@ -348,7 +348,7 @@ class DeepCompressModelV2(tf.keras.Model):
             )
 
         elif self.entropy_model_type == 'attention':
-            from attention_context import AttentionEntropyModel
+            from .attention_context import AttentionEntropyModel
             self.entropy_module = AttentionEntropyModel(
                 latent_channels=self.latent_channels,
                 hyper_channels=self.hyper_channels,
@@ -356,7 +356,7 @@ class DeepCompressModelV2(tf.keras.Model):
             )
 
         elif self.entropy_model_type == 'hybrid':
-            from attention_context import HybridAttentionEntropyModel
+            from .attention_context import HybridAttentionEntropyModel
             self.entropy_module = HybridAttentionEntropyModel(
                 latent_channels=self.latent_channels,
                 hyper_channels=self.hyper_channels,

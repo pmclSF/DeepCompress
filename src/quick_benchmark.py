@@ -28,7 +28,7 @@ import tensorflow as tf
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
+from .model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
 
 
 @dataclass

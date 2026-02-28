@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import tensorflow as tf
 
-from constants import LOG_2_RECIPROCAL
+from .constants import LOG_2_RECIPROCAL
 
 
 class MaskedConv3D(tf.keras.layers.Layer):
@@ -265,8 +265,8 @@ class ContextualEntropyModel(tf.keras.Model):
         self.num_context_layers = num_context_layers
 
         # Import here to avoid circular dependency
-        from entropy_model import ConditionalGaussian
-        from entropy_parameters import EntropyParameters
+        from .entropy_model import ConditionalGaussian
+        from .entropy_parameters import EntropyParameters
 
         # Hyperprior-based parameter prediction
         self.entropy_parameters = EntropyParameters(

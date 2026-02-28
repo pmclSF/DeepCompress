@@ -5,7 +5,7 @@ import os
 import keras_tuner as kt
 import tensorflow as tf
 
-from ds_mesh_to_pc import read_off
+from .ds_mesh_to_pc import read_off
 
 
 def create_model(hp):

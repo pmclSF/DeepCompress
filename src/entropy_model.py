@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, Tuple
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-from constants import LOG_2_RECIPROCAL
+from .constants import LOG_2_RECIPROCAL
 
 
 class PatchedGaussianConditional(tf.keras.layers.Layer):
@@ -335,7 +335,7 @@ class MeanScaleHyperprior(tf.keras.Model):
         self.hidden_channels = hidden_channels or latent_channels * 2
 
         # Import here to avoid circular dependency
-        from entropy_parameters import EntropyParameters
+        from .entropy_parameters import EntropyParameters
 
         # Network to predict mean/scale from hyperprior
         self.entropy_parameters = EntropyParameters(

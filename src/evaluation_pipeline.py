@@ -5,10 +5,10 @@ from typing import Any, Dict
 
 import tensorflow as tf
 
-from data_loader import DataLoader
-from ev_compare import PointCloudMetrics
-from model_transforms import DeepCompressModel, TransformConfig
-from mp_report import ExperimentReporter
+from .data_loader import DataLoader
+from .ev_compare import PointCloudMetrics
+from .model_transforms import DeepCompressModel, TransformConfig
+from .mp_report import ExperimentReporter
 
 
 @dataclass
@@ -24,9 +24,12 @@ class EvaluationResult:
 class EvaluationPipeline:
     """Pipeline for evaluating DeepCompress model."""
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, checkpoint_override: str = None):
         self.config = self._load_config(config_path)
         self.logger = logging.getLogger(__name__)
+
+        if checkpoint_override:
+            self.config['checkpoint_path'] = checkpoint_override
 
         # Initialize components
         self.data_loader = DataLoader(self.config)
@@ -139,7 +142,7 @@ def main():
     )
 
     # Run evaluation
-    pipeline = EvaluationPipeline(args.config)
+    pipeline = EvaluationPipeline(args.config, checkpoint_override=args.checkpoint)
     results = pipeline.evaluate()
     pipeline.generate_report(results)
 

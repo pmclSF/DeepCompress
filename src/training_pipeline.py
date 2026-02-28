@@ -10,9 +10,9 @@ class TrainingPipeline:
     def __init__(self, config_path: str):
         import yaml
 
-        from data_loader import DataLoader
-        from entropy_model import EntropyModel
-        from model_transforms import DeepCompressModel, TransformConfig
+        from .data_loader import DataLoader
+        from .entropy_model import EntropyModel
+        from .model_transforms import DeepCompressModel, TransformConfig
 
         self.config_path = config_path
         with open(config_path, 'r') as f:
