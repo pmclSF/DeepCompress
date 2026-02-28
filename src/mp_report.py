@@ -69,7 +69,7 @@ class ExperimentReporter:
             'psnr': float('-inf'),
             'bd_rate': float('inf'),
             'bitrate': float('inf'),
-            'compression_ratio': float('inf'),
+            'compression_ratio': float('-inf'),
             'compression_time': float('inf'),
             'decompression_time': float('inf')
         }
@@ -91,7 +91,7 @@ class ExperimentReporter:
             for metric in best_metrics.keys():
                 if metric in results:
                     value = results[metric]
-                    if metric == 'psnr':  # Higher is better
+                    if metric in ('psnr', 'compression_ratio'):  # Higher is better
                         if value > best_metrics[metric]:
                             best_metrics[metric] = value
                             best_models[metric] = file_name

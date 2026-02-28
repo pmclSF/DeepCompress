@@ -391,7 +391,7 @@ def benchmark_masked_conv():
 
 def benchmark_attention():
     """Benchmark attention implementations."""
-    from attention_context import SparseAttention3D, WindowedAttention3D
+    from .attention_context import SparseAttention3D, WindowedAttention3D
 
     dim = 64
     input_shape = (1, 16, 16, 16, dim)  # Smaller for testing

@@ -42,14 +42,19 @@ def read_off(file_path: str) -> Optional[MeshData]:
                 vertices.append(vertex)
             vertices = np.array(vertices, dtype=np.float32)
 
-            # Read faces if present
+            # Read faces if present, triangulating n-gons via fan triangulation
             faces = None
             if n_faces > 0:
-                faces = []
+                triangles = []
                 for _ in range(n_faces):
-                    face = list(map(int, file.readline().strip().split()[1:]))  # Skip count
-                    faces.append(face)
-                faces = np.array(faces, dtype=np.int32)
+                    indices = list(map(int, file.readline().strip().split()[1:]))
+                    if len(indices) < 3:
+                        continue
+                    # Fan triangulation: (v0, v1, v2), (v0, v2, v3), ...
+                    for i in range(1, len(indices) - 1):
+                        triangles.append([indices[0], indices[i], indices[i + 1]])
+                if triangles:
+                    faces = np.array(triangles, dtype=np.int32)
 
             # Compute face normals if faces are present
             face_normals = None
@@ -90,23 +95,25 @@ def sample_points_from_mesh(
         Tuple of points array and optionally normals array.
     """
     if mesh_data.faces is not None and len(mesh_data.faces) > 0:
-        # Sample from faces using area weighting
-        areas = []
-        centroids = []
-        for face in mesh_data.faces:
-            v1, v2, v3 = mesh_data.vertices[face]
-            area = np.linalg.norm(np.cross(v2 - v1, v3 - v1)) / 2
-            centroid = (v1 + v2 + v3) / 3
-            areas.append(area)
-            centroids.append(centroid)
+        # Sample from faces using area-weighted barycentric sampling
+        v1s = mesh_data.vertices[mesh_data.faces[:, 0]]
+        v2s = mesh_data.vertices[mesh_data.faces[:, 1]]
+        v3s = mesh_data.vertices[mesh_data.faces[:, 2]]
 
-        # Normalize areas for probability distribution
-        areas = np.array(areas)
+        areas = np.linalg.norm(np.cross(v2s - v1s, v3s - v1s), axis=1) / 2
         probabilities = areas / areas.sum()
 
-        # Sample points
+        # Sample faces by area
         indices = np.random.choice(len(areas), num_points, p=probabilities)
-        points = np.array(centroids)[indices]
+
+        # Generate random barycentric coordinates for uniform sampling
+        r1 = np.sqrt(np.random.random(num_points))
+        r2 = np.random.random(num_points)
+        points = (
+            (1 - r1)[:, None] * v1s[indices]
+            + (r1 * (1 - r2))[:, None] * v2s[indices]
+            + (r1 * r2)[:, None] * v3s[indices]
+        )
 
         # Get corresponding normals if requested
         normals = None

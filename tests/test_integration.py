@@ -322,5 +322,39 @@ class TestBackwardCompatibility(tf.test.TestCase):
         self.assertEqual(x_hat.shape[:-1], input_tensor.shape[:-1])
 
 
+class TestCheckpointResumeIntegration(tf.test.TestCase):
+    """Integration test for checkpoint save/load through new serialization format."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.test_env = setup_test_environment(tmp_path)
+        self.resolution = 16
+        self.batch_size = 1
+
+    @pytest.mark.integration
+    def test_training_checkpoint_resume_loss_continuity(self):
+        """Model state is preserved through checkpoint save/load cycle."""
+        pipeline = TrainingPipeline(self.test_env['config_path'])
+        batch = create_mock_voxel_grid(self.resolution, self.batch_size)[..., 0]
+
+        # Train a few steps to establish non-trivial model + optimizer state
+        for _ in range(3):
+            pipeline._train_step(batch, training=True)
+
+        pipeline.save_checkpoint('resume_test')
+
+        # Record eval loss at checkpoint
+        checkpoint_loss = pipeline._train_step(batch, training=False)['total_loss']
+
+        # Load into fresh pipeline and verify same eval loss
+        new_pipeline = TrainingPipeline(pipeline.config_path)
+        new_pipeline._train_step(batch, training=True)  # Build optimizer variables
+        new_pipeline.load_checkpoint('resume_test')
+
+        resumed_loss = new_pipeline._train_step(batch, training=False)['total_loss']
+
+        self.assertAllClose(checkpoint_loss, resumed_loss, rtol=1e-4)
+
+
 if __name__ == '__main__':
     tf.test.main()

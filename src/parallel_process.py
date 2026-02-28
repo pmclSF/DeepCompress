@@ -71,7 +71,13 @@ class Popen:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.terminate()
+        if self.process.poll() is None:
+            self.terminate()
+        else:
+            if hasattr(self.process, 'stdout') and self.process.stdout:
+                self.process.stdout.close()
+            if hasattr(self.process, 'stderr') and self.process.stderr:
+                self.process.stderr.close()
 
 def parallel_process(
     func: Callable[[Any], Any],

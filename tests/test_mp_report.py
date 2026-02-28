@@ -113,8 +113,8 @@ def test_best_performance_selection(setup_experiment):
     assert best_performance['best_bd_rate'] == 'original_3.ply'
     # The best bitrate should be from "original_2.ply" (lowest bitrate is best)
     assert best_performance['best_bitrate'] == 'original_2.ply'
-    # The best compression ratio should be from "original_1.ply" (lowest is best: 0.75)
-    assert best_performance['best_compression_ratio'] == 'original_1.ply'
+    # The best compression ratio should be from "original_3.ply" (highest is best: 0.85)
+    assert best_performance['best_compression_ratio'] == 'original_3.ply'
     # The best compression time should be from "original_3.ply" (shorter is better: 2.0)
     assert best_performance['best_compression_time'] == 'original_3.ply'
     # The best decompression time should be from "original_1.ply" (shorter is better: 1.0)

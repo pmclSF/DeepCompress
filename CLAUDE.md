@@ -68,7 +68,7 @@ else:
 
 **Rules:**
 - Model-level `call()` methods and any layer that branches on training mode **must** accept `training=None` and pass it through to sub-layers that need it.
-- Leaf layers that do not use `training` internally (e.g., `CENICGDN`, `SpatialSeparableConv`, `MaskedConv3D`, `SliceTransform`) currently omit it from their signatures. This is the established convention — do not add `training` to these unless they gain training-dependent behavior.
+- Leaf layers that do not use `training` internally (e.g., `GDN`, `SpatialSeparableConv`, `MaskedConv3D`, `SliceTransform`) currently omit it from their signatures. This is the established convention — do not add `training` to these unless they gain training-dependent behavior.
 - **Never remove the training conditional** from methods that have it. Never replace noise injection with unconditional `tf.round()`.
 - When adding new layers: include `training=None` if the layer has any training-dependent behavior. Omit it for pure computation layers.
 
@@ -77,7 +77,7 @@ else:
 All model tensors are 5D: `(batch, depth, height, width, channels)` — channels-last.
 
 - Convolutions are `Conv3D`, never `Conv2D`. Kernels are 3-tuples: `(3, 3, 3)`.
-- Channel axis is axis 4 (see `CENICGDN.call()` which does `tf.tensordot(norm, self.gamma, [[4], [0]])`).
+- Channel axis is axis 4 (see `GDN.call()` which uses `tf.einsum('...c,cd->...d', ...)`).
 - Input voxel grids have 1 channel: shape `(B, D, H, W, 1)`.
 - Do not flatten spatial dimensions to use 2D ops. The 3D structure is load-bearing.
 

@@ -1,9 +1,33 @@
 from typing import Any, Dict, Optional, Tuple
 
 import tensorflow as tf
-import tensorflow_probability as tfp
 
-from constants import LOG_2_RECIPROCAL
+from .constants import EPSILON, LOG_2_RECIPROCAL
+
+
+def _discretized_gaussian_likelihood(inputs, mean, scale):
+    """Compute probability mass for quantized inputs under Gaussian model.
+
+    P(x) = CDF((x - mean + 0.5) / scale) - CDF((x - mean - 0.5) / scale)
+
+    This is the correct discretized likelihood for entropy coding, replacing
+    the continuous log-PDF which does not integrate to 1 over integers.
+
+    Args:
+        inputs: Input tensor (quantized or noise-added values).
+        mean: Mean of the Gaussian distribution.
+        scale: Scale (std dev) of the Gaussian distribution.
+
+    Returns:
+        Per-element probability mass, floored at EPSILON to prevent log(0).
+    """
+    scale = tf.maximum(scale, 1e-6)
+    centered = inputs - mean
+    upper = (centered + 0.5) / scale
+    lower = (centered - 0.5) / scale
+    likelihood = 0.5 * (1 + tf.math.erf(upper / tf.sqrt(2.0))) - \
+        0.5 * (1 + tf.math.erf(lower / tf.sqrt(2.0)))
+    return tf.maximum(likelihood, EPSILON)
 
 
 class PatchedGaussianConditional(tf.keras.layers.Layer):
@@ -115,31 +139,32 @@ class PatchedGaussianConditional(tf.keras.layers.Layer):
         return tf.reshape(quantized_flat, original_shape)
 
     def compress(self, inputs: tf.Tensor) -> tf.Tensor:
-        scale = self.quantize_scale(self.scale)
+        """Quantize inputs relative to learned mean."""
         centered = inputs - self.mean
-        normalized = centered / scale
-        quantized = tf.round(normalized)
+        quantized = tf.round(centered)
 
         self._debug_tensors.update({
             'compress_inputs': inputs,
-            'compress_scale': scale,
             'compress_outputs': quantized
         })
 
         return quantized
 
     def decompress(self, inputs: tf.Tensor) -> tf.Tensor:
-        scale = self.quantize_scale(self.scale)
-        denormalized = inputs * scale
-        decompressed = denormalized + self.mean
+        """Reconstruct from integer symbols."""
+        decompressed = inputs + self.mean
 
         self._debug_tensors.update({
             'decompress_inputs': inputs,
-            'decompress_scale': scale,
             'decompress_outputs': decompressed
         })
 
         return decompressed
+
+    def likelihood(self, inputs: tf.Tensor) -> tf.Tensor:
+        """Compute discretized Gaussian likelihood for inputs."""
+        scale = tf.maximum(tf.abs(self.scale), 1e-6)
+        return _discretized_gaussian_likelihood(inputs, self.mean, scale)
 
     def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
         self._debug_tensors['inputs'] = inputs
@@ -172,10 +197,7 @@ class EntropyModel(tf.keras.Model):
             self.gaussian.build(inputs.shape)
 
         compressed = self.gaussian.compress(inputs)
-        likelihood = tfp.distributions.Normal(
-            loc=self.gaussian.mean,
-            scale=self.gaussian.scale
-        ).log_prob(inputs)
+        likelihood = self.gaussian.likelihood(inputs)
         return compressed, likelihood
 
 
@@ -208,21 +230,11 @@ class ConditionalGaussian(tf.keras.layers.Layer):
         return tf.round(inputs)
 
     def compress(self, inputs: tf.Tensor, scale: tf.Tensor, mean: tf.Tensor) -> tf.Tensor:
+        """Quantize inputs relative to the learned mean.
+
+        The scale parameter affects entropy coding probability, not
+        the quantization grid. This is correct per the standard formulation.
         """
-        Compress inputs using provided scale and mean.
-
-        Args:
-            inputs: Input tensor to compress.
-            scale: Scale parameter for the Gaussian distribution.
-            mean: Mean parameter for the Gaussian distribution.
-
-        Returns:
-            Quantized (compressed) tensor.
-        """
-        # Ensure scale is positive
-        scale = tf.maximum(scale, self.scale_min)
-
-        # Center and normalize
         centered = inputs - mean
         quantized = tf.round(centered)
 
@@ -236,18 +248,7 @@ class ConditionalGaussian(tf.keras.layers.Layer):
         return quantized
 
     def decompress(self, inputs: tf.Tensor, scale: tf.Tensor, mean: tf.Tensor) -> tf.Tensor:
-        """
-        Decompress inputs using provided scale and mean.
-
-        Args:
-            inputs: Quantized tensor to decompress.
-            scale: Scale parameter for the Gaussian distribution.
-            mean: Mean parameter for the Gaussian distribution.
-
-        Returns:
-            Decompressed (reconstructed) tensor.
-        """
-        # Add back the mean
+        """Reconstruct from integer symbols."""
         decompressed = inputs + mean
 
         self._debug_tensors.update({
@@ -272,7 +273,7 @@ class ConditionalGaussian(tf.keras.layers.Layer):
 
         Returns:
             Tuple of (outputs, likelihood) where outputs are the reconstructed
-            values and likelihood is the log-probability under the distribution.
+            values and likelihood is the discretized probability mass.
         """
         self._debug_tensors['inputs'] = inputs
 
@@ -288,9 +289,8 @@ class ConditionalGaussian(tf.keras.layers.Layer):
         # Reconstruct
         outputs = quantized + mean
 
-        # Compute likelihood using the Gaussian distribution
-        distribution = tfp.distributions.Normal(loc=mean, scale=scale)
-        likelihood = distribution.log_prob(inputs)
+        # Compute discretized likelihood on the output values
+        likelihood = _discretized_gaussian_likelihood(outputs, mean, scale)
 
         self._debug_tensors['outputs'] = outputs
         self._debug_tensors['likelihood'] = likelihood
@@ -335,7 +335,7 @@ class MeanScaleHyperprior(tf.keras.Model):
         self.hidden_channels = hidden_channels or latent_channels * 2
 
         # Import here to avoid circular dependency
-        from entropy_parameters import EntropyParameters
+        from .entropy_parameters import EntropyParameters
 
         # Network to predict mean/scale from hyperprior
         self.entropy_parameters = EntropyParameters(
@@ -350,6 +350,7 @@ class MeanScaleHyperprior(tf.keras.Model):
         self.hyper_entropy = PatchedGaussianConditional()
 
     def call(self, y: tf.Tensor, z_hat: tf.Tensor,
+             z: Optional[tf.Tensor] = None,
              training: Optional[bool] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Process latent y using hyperprior z_hat.
@@ -357,13 +358,14 @@ class MeanScaleHyperprior(tf.keras.Model):
         Args:
             y: Main latent representation.
             z_hat: Decoded hyperprior (typically from hyper_synthesis(z)).
+            z: Quantized/noised hyper-latent for computing z rate.
             training: Whether in training mode.
 
         Returns:
             Tuple of (y_hat, y_likelihood, total_bits) where:
                 - y_hat: Reconstructed latent
-                - y_likelihood: Log-probability of y under the predicted distribution
-                - total_bits: Estimated total bits for encoding
+                - y_likelihood: Discretized probability mass of y
+                - total_bits: Estimated total bits (y_bits + z_bits)
         """
         # Predict distribution parameters from hyperprior
         mean, scale = self.entropy_parameters(z_hat)
@@ -371,10 +373,18 @@ class MeanScaleHyperprior(tf.keras.Model):
         # Process through conditional Gaussian
         y_hat, y_likelihood = self.conditional(y, scale, mean, training=training)
 
-        # Estimate bits (negative log-likelihood converted to bits)
-        # Using pre-computed reciprocal: multiplication is faster than division
-        bits_per_element = -y_likelihood * LOG_2_RECIPROCAL
-        total_bits = tf.reduce_sum(bits_per_element)
+        # Compute y bits from discretized likelihood
+        y_bits = tf.reduce_sum(-tf.math.log(y_likelihood) * LOG_2_RECIPROCAL)
+
+        # Compute z bits if z is provided
+        z_bits = tf.constant(0.0)
+        if z is not None:
+            if not self.hyper_entropy.built:
+                self.hyper_entropy.build(z.shape)
+            z_likelihood = self.hyper_entropy.likelihood(z)
+            z_bits = tf.reduce_sum(-tf.math.log(z_likelihood) * LOG_2_RECIPROCAL)
+
+        total_bits = y_bits + z_bits
 
         return y_hat, y_likelihood, total_bits
 

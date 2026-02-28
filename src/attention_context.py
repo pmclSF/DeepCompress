@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import tensorflow as tf
 
-from constants import LOG_2_RECIPROCAL
+from .constants import LOG_2_RECIPROCAL
 
 
 class WindowedAttention3D(tf.keras.layers.Layer):
@@ -669,8 +669,8 @@ class AttentionEntropyModel(tf.keras.Model):
         self.num_attention_layers = num_attention_layers
 
         # Import here to avoid circular dependency
-        from entropy_model import ConditionalGaussian
-        from entropy_parameters import EntropyParameters
+        from .entropy_model import ConditionalGaussian, PatchedGaussianConditional
+        from .entropy_parameters import EntropyParameters
 
         # Hyperprior-based parameter prediction
         self.entropy_parameters = EntropyParameters(
@@ -714,6 +714,9 @@ class AttentionEntropyModel(tf.keras.Model):
         # Conditional Gaussian for entropy coding
         self.conditional = ConditionalGaussian()
 
+        # Hyperprior entropy model (for z)
+        self.hyper_entropy = PatchedGaussianConditional()
+
         self.scale_min = 0.01
 
     def _split_params(self, params: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
@@ -723,6 +726,7 @@ class AttentionEntropyModel(tf.keras.Model):
         return mean, scale
 
     def call(self, y: tf.Tensor, z_hat: tf.Tensor,
+             z: Optional[tf.Tensor] = None,
              training: Optional[bool] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Process latent y using hyperprior and attention context.
@@ -730,6 +734,7 @@ class AttentionEntropyModel(tf.keras.Model):
         Args:
             y: Main latent representation.
             z_hat: Decoded hyperprior.
+            z: Quantized/noised hyper-latent for computing z rate.
             training: Whether in training mode.
 
         Returns:
@@ -758,10 +763,18 @@ class AttentionEntropyModel(tf.keras.Model):
         # Process through conditional Gaussian
         y_hat, y_likelihood = self.conditional(y, scale, mean, training=training)
 
-        # Compute total bits
-        # Using pre-computed reciprocal: multiplication is faster than division
-        bits_per_element = -y_likelihood * LOG_2_RECIPROCAL
-        total_bits = tf.reduce_sum(bits_per_element)
+        # Compute y bits from discretized likelihood
+        y_bits = tf.reduce_sum(-tf.math.log(y_likelihood) * LOG_2_RECIPROCAL)
+
+        # Compute z bits if z is provided
+        z_bits = tf.constant(0.0)
+        if z is not None:
+            if not self.hyper_entropy.built:
+                self.hyper_entropy.build(z.shape)
+            z_likelihood = self.hyper_entropy.likelihood(z)
+            z_bits = tf.reduce_sum(-tf.math.log(z_likelihood) * LOG_2_RECIPROCAL)
+
+        total_bits = y_bits + z_bits
 
         return y_hat, y_likelihood, total_bits
 
@@ -804,9 +817,9 @@ class HybridAttentionEntropyModel(tf.keras.Model):
         self.num_channel_groups = num_channel_groups
         self.num_attention_layers = num_attention_layers
 
-        from channel_context import ChannelContext
-        from entropy_model import ConditionalGaussian
-        from entropy_parameters import EntropyParameters
+        from .channel_context import ChannelContext
+        from .entropy_model import ConditionalGaussian, PatchedGaussianConditional
+        from .entropy_parameters import EntropyParameters
 
         # Hyperprior parameters
         self.entropy_parameters = EntropyParameters(
@@ -819,6 +832,8 @@ class HybridAttentionEntropyModel(tf.keras.Model):
             num_groups=num_channel_groups
         )
 
+        self.channels_per_group = latent_channels // num_channel_groups
+
         # Attention context (applied per channel group)
         self.attention_contexts = [
             BidirectionalMaskTransformer(
@@ -826,6 +841,17 @@ class HybridAttentionEntropyModel(tf.keras.Model):
                 num_heads=4,
                 num_layers=num_attention_layers,
                 name=f'attention_{i}'
+            )
+            for i in range(num_channel_groups)
+        ]
+
+        # Attention output to parameters (replaces concat hack)
+        self.attention_to_params = [
+            tf.keras.layers.Conv3D(
+                filters=self.channels_per_group * 2,  # mean and scale
+                kernel_size=1,
+                padding='same',
+                name=f'attn_to_params_{i}'
             )
             for i in range(num_channel_groups)
         ]
@@ -847,7 +873,9 @@ class HybridAttentionEntropyModel(tf.keras.Model):
             for i in range(num_channel_groups)
         ]
 
-        self.channels_per_group = latent_channels // num_channel_groups
+        # Hyperprior entropy model (for z)
+        self.hyper_entropy = PatchedGaussianConditional()
+
         self.scale_min = 0.01
 
     def _split_params(self, params: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
@@ -856,6 +884,7 @@ class HybridAttentionEntropyModel(tf.keras.Model):
         return mean, scale
 
     def call(self, y: tf.Tensor, z_hat: tf.Tensor,
+             z: Optional[tf.Tensor] = None,
              training: Optional[bool] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """Process with all context types combined."""
         # Get hyperprior parameters
@@ -883,9 +912,9 @@ class HybridAttentionEntropyModel(tf.keras.Model):
             combined_mean = hyper_mean_slice + context_mean
             combined_scale = hyper_scale_slice * (1.0 + context_scale)
 
-            # Add attention refinement
+            # Project attention features to mean/scale parameters
             hyper_params = tf.concat([combined_mean, combined_scale], axis=-1)
-            attn_params = tf.concat([attn_features, attn_features], axis=-1)  # Use features for both
+            attn_params = self.attention_to_params[i](attn_features)
             combined = tf.concat([hyper_params, attn_params], axis=-1)
             fused_params = self.param_fusions[i](combined)
 
@@ -902,9 +931,18 @@ class HybridAttentionEntropyModel(tf.keras.Model):
         y_hat = tf.concat(y_hat_parts, axis=-1)
         y_likelihood = tf.concat(likelihood_parts, axis=-1)
 
-        # Using pre-computed reciprocal: multiplication is faster than division
-        bits_per_element = -y_likelihood * LOG_2_RECIPROCAL
-        total_bits = tf.reduce_sum(bits_per_element)
+        # Compute y bits from discretized likelihood
+        y_bits = tf.reduce_sum(-tf.math.log(y_likelihood) * LOG_2_RECIPROCAL)
+
+        # Compute z bits if z is provided
+        z_bits = tf.constant(0.0)
+        if z is not None:
+            if not self.hyper_entropy.built:
+                self.hyper_entropy.build(z.shape)
+            z_likelihood = self.hyper_entropy.likelihood(z)
+            z_bits = tf.reduce_sum(-tf.math.log(z_likelihood) * LOG_2_RECIPROCAL)
+
+        total_bits = y_bits + z_bits
 
         return y_hat, y_likelihood, total_bits
 
