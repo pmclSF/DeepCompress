@@ -58,7 +58,7 @@ class TrainingPipeline:
         """Run a single training step with joint rate-distortion optimization."""
         with tf.GradientTape() as tape:
             inputs = batch[..., tf.newaxis] if len(batch.shape) == 4 else batch
-            x_hat, y, y_hat, z = self.model(inputs, training=training)
+            x_hat, y, z_hat, z_noisy = self.model(inputs, training=training)
 
             # Compute focal loss on reconstruction (distortion term)
             focal_loss = self.compute_focal_loss(
@@ -153,6 +153,9 @@ class TrainingPipeline:
         for batch in val_dataset:
             losses = self._train_step(batch, training=False)
             val_losses.append({k: v.numpy() for k, v in losses.items()})
+
+        if not val_losses:
+            return {'focal_loss': 0.0, 'entropy_loss': 0.0, 'total_loss': float('inf')}
 
         avg_losses = {}
         for metric in val_losses[0].keys():

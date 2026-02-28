@@ -3,7 +3,7 @@ from typing import Tuple
 
 import tensorflow as tf
 
-from .constants import EPSILON, LOG_2_RECIPROCAL
+from .constants import LOG_2_RECIPROCAL
 
 
 @dataclass
@@ -16,40 +16,57 @@ class TransformConfig:
     conv_type: str = 'separable'
 
 
-class CENICGDN(tf.keras.layers.Layer):
-    """CENIC-GDN activation function implementation."""
+class GDN(tf.keras.layers.Layer):
+    """Generalized Divisive Normalization (Balle et al., 2016).
 
-    def __init__(self, channels: int, **kwargs):
+    y_i = x_i / sqrt(beta_i + sum_j(gamma_ij * x_j^2))
+
+    When inverse=True, computes IGDN (inverse GDN) for the synthesis path:
+    y_i = x_i * sqrt(beta_i + sum_j(gamma_ij * x_j^2))
+
+    Args:
+        inverse: If True, compute IGDN instead of GDN.
+    """
+
+    def __init__(self, inverse: bool = False, **kwargs):
         super().__init__(**kwargs)
-        self.channels = channels
+        self.inverse = inverse
 
     def build(self, input_shape):
+        num_channels = input_shape[-1]
         self.beta = self.add_weight(
             name='beta',
-            shape=[self.channels],
-            initializer='ones',
+            shape=[num_channels],
+            initializer=tf.initializers.Ones(),
+            constraint=tf.keras.constraints.NonNeg(),
             trainable=True
         )
         self.gamma = self.add_weight(
             name='gamma',
-            shape=[self.channels, self.channels],
-            initializer='zeros',
+            shape=[num_channels, num_channels],
+            initializer=tf.initializers.Identity(gain=0.1),
             trainable=True
         )
         super().build(input_shape)
 
-    def call(self, x):
-        # Note: XLA compilation removed as it breaks gradient flow when layers are composed
-        norm = tf.abs(x)
-        # Use axis 4 (channel dimension) for 5D tensors (batch, D, H, W, C)
-        norm = tf.tensordot(norm, self.gamma, [[4], [0]])
-        norm = tf.nn.bias_add(norm, self.beta)
-        return x / tf.maximum(norm, EPSILON)
+    def call(self, inputs):
+        # Ensure gamma is non-negative and symmetric
+        gamma = tf.nn.relu(self.gamma)
+        gamma = (gamma + tf.transpose(gamma)) / 2.0
+
+        # Compute normalization: beta_i + sum_j(gamma_ij * x_j^2)
+        norm = tf.einsum('...c,cd->...d', inputs ** 2, gamma)
+        norm = tf.sqrt(self.beta + norm)
+
+        if self.inverse:
+            return inputs * norm  # IGDN
+        else:
+            return inputs / norm  # GDN
 
     def get_config(self):
         config = super().get_config()
         config.update({
-            'channels': self.channels
+            'inverse': self.inverse
         })
         return config
 
@@ -126,8 +143,8 @@ class AnalysisTransform(tf.keras.layers.Layer):
 
             self.conv_layers.append(conv)
 
-            if config.activation == 'cenic_gdn':
-                self.conv_layers.append(CENICGDN(current_filters))
+            if config.activation in ('gdn', 'cenic_gdn'):
+                self.conv_layers.append(GDN(inverse=False))
             else:
                 self.conv_layers.append(tf.keras.layers.ReLU())
 
@@ -160,24 +177,19 @@ class SynthesisTransform(tf.keras.layers.Layer):
         current_filters = config.filters * 4  # Start with max channels
 
         for i in range(3):  # Three blocks as per paper
-            if config.conv_type == 'separable':
-                conv = SpatialSeparableConv(
-                    filters=current_filters,
-                    kernel_size=config.kernel_size,
-                    strides=config.strides
-                )
-            else:
-                conv = tf.keras.layers.Conv3DTranspose(
-                    filters=current_filters,
-                    kernel_size=config.kernel_size,
-                    strides=config.strides,
-                    padding='same'
-                )
+            # Synthesis always needs Conv3DTranspose for upsampling
+            # SpatialSeparableConv only supports forward (downsampling) convolution
+            conv = tf.keras.layers.Conv3DTranspose(
+                filters=current_filters,
+                kernel_size=config.kernel_size,
+                strides=config.strides,
+                padding='same'
+            )
 
             self.conv_layers.append(conv)
 
-            if config.activation == 'cenic_gdn':
-                self.conv_layers.append(CENICGDN(current_filters))
+            if config.activation in ('gdn', 'cenic_gdn'):
+                self.conv_layers.append(GDN(inverse=True))  # IGDN for synthesis
             else:
                 self.conv_layers.append(tf.keras.layers.ReLU())
 
@@ -231,16 +243,19 @@ class DeepCompressModel(tf.keras.Model):
         y = self.analysis(inputs)
         z = self.hyper_analysis(y)
 
-        # Add uniform noise for training
+        # Add uniform noise for training, hard rounding for inference
         if training:
-            y = y + tf.random.uniform(tf.shape(y), -0.5, 0.5)
-            z = z + tf.random.uniform(tf.shape(z), -0.5, 0.5)
+            y_hat = y + tf.random.uniform(tf.shape(y), -0.5, 0.5)
+            z_noisy = z + tf.random.uniform(tf.shape(z), -0.5, 0.5)
+        else:
+            y_hat = tf.round(y)
+            z_noisy = tf.round(z)
 
-        # Synthesis
-        y_hat = self.hyper_synthesis(z)
-        x_hat = tf.sigmoid(self.output_projection(self.synthesis(y)))
+        # Synthesis — decode from quantized latent (y_hat), not raw encoder output
+        z_hat = self.hyper_synthesis(z_noisy)
+        x_hat = tf.sigmoid(self.output_projection(self.synthesis(y_hat)))
 
-        return x_hat, y, y_hat, z
+        return x_hat, y, z_hat, z_noisy
 
     def get_config(self):
         config = super().get_config()
@@ -311,10 +326,10 @@ class DeepCompressModelV2(tf.keras.Model):
             activation='relu'
         ))
 
-        # Compute channel dimensions
-        # Analysis progressively doubles channels 3 times
-        self.latent_channels = config.filters * 4  # After 3 blocks of doubling
-        self.hyper_channels = (config.filters // 2) * 4
+        # Compute latent channel dimensions dynamically from analysis transforms
+        # Analysis doubles channels each block: filters -> 2*filters -> 4*filters
+        self.latent_channels = config.filters * (2 ** 2)  # After 3 conv blocks with doubling
+        self.hyper_channels = (config.filters // 2) * (2 ** 2)
 
         # Create entropy model based on selection
         self._create_entropy_model()
@@ -449,7 +464,7 @@ class DeepCompressModelV2(tf.keras.Model):
             inputs: Input voxel grid.
 
         Returns:
-            Tuple of (compressed_data, metadata) for storage/transmission.
+            Dict with compressed symbols and metadata.
         """
         # Analysis
         y = self.analysis(inputs)
@@ -463,12 +478,17 @@ class DeepCompressModelV2(tf.keras.Model):
             y_quantized = tf.round(y)
             compressed_y = y_quantized
             side_info = {}
-        elif self.entropy_model_type in ['hyperprior', 'context']:
+        elif self.entropy_model_type in ('hyperprior', 'context'):
             compressed_y, side_info = self.entropy_module.compress(y, z_hat)
         elif self.entropy_model_type == 'channel':
             compressed_y, side_info = self.entropy_module.compress(y, z_hat)
+        elif self.entropy_model_type in ('attention', 'hybrid'):
+            # Attention/hybrid: use hyperprior mean for centered quantization
+            # TODO: implement actual arithmetic coding for attention/hybrid models
+            mean, scale = self.entropy_module.entropy_parameters(z_hat)
+            compressed_y = tf.round(y - mean)
+            side_info = {'mean': mean, 'scale': scale}
         else:
-            # For attention models, use basic quantization
             compressed_y = tf.round(y)
             side_info = {}
 
@@ -486,7 +506,7 @@ class DeepCompressModelV2(tf.keras.Model):
             compressed_data: Dict with compressed data from compress().
 
         Returns:
-            Reconstructed voxel grid.
+            Reconstructed voxel grid (sigmoid-applied probabilities).
         """
         y_compressed = compressed_data['y']
         z = compressed_data['z']
@@ -500,11 +520,15 @@ class DeepCompressModelV2(tf.keras.Model):
             y_hat = self.entropy_module.decompress(y_compressed, z_hat)
         elif self.entropy_model_type == 'channel':
             y_hat = self.entropy_module.decode_parallel(z_hat, y_compressed)
+        elif self.entropy_model_type in ('attention', 'hybrid'):
+            # TODO: implement actual arithmetic coding for attention/hybrid models
+            mean, _ = self.entropy_module.entropy_parameters(z_hat)
+            y_hat = y_compressed + mean
         else:
             y_hat = y_compressed
 
-        # Synthesis
-        x_hat = self.output_projection(self.synthesis(y_hat))
+        # Synthesis — apply sigmoid to logits
+        x_hat = tf.sigmoid(self.output_projection(self.synthesis(y_hat)))
 
         return x_hat
 

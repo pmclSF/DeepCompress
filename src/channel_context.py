@@ -310,22 +310,17 @@ class ChannelContextEntropyModel(tf.keras.Model):
 
             # Get context params (using y for training, y_hat for inference)
             # Note: Use .call() to pass non-tensor group_idx as keyword argument
-            if training:
+            if i == 0:
+                # First group: no context available, channel_context returns zeros
+                context_mean, context_scale = self.channel_context.call(y, group_idx=0)
+            elif training:
                 # Training: use ground truth y for context (teacher forcing)
                 context_mean, context_scale = self.channel_context.call(y, group_idx=i)
             else:
-                # Inference: use only already decoded groups (no padding needed!)
-                # The channel_context only uses channels 0..group_idx-1, so we
-                # only need to concatenate the decoded parts without padding.
-                # This optimization reduces memory allocations by ~25%.
-                if i == 0:
-                    # First group has no context - channel_context handles this
-                    y_hat_partial = y_hat_parts[0] if y_hat_parts else None
-                else:
-                    # Concatenate only the decoded parts (no zero padding)
-                    y_hat_partial = tf.concat(y_hat_parts, axis=-1)
+                # Inference: use already decoded groups for context
+                y_hat_partial = tf.concat(y_hat_parts, axis=-1)
                 context_mean, context_scale = self.channel_context.call(
-                    y_hat_partial if y_hat_partial is not None else y, group_idx=i
+                    y_hat_partial, group_idx=i
                 )
 
             # Fuse parameters

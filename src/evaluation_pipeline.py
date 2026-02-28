@@ -66,7 +66,7 @@ class EvaluationPipeline:
                         point_cloud) -> Dict[str, float]:
         """Evaluate model on single point cloud."""
         # Forward pass through model
-        x_hat, y, y_hat, z = self.model(point_cloud, training=False)
+        x_hat, y, z_hat, z_noisy = self.model(point_cloud, training=False)
 
         # Compute metrics
         results = {}

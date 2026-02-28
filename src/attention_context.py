@@ -832,6 +832,8 @@ class HybridAttentionEntropyModel(tf.keras.Model):
             num_groups=num_channel_groups
         )
 
+        self.channels_per_group = latent_channels // num_channel_groups
+
         # Attention context (applied per channel group)
         self.attention_contexts = [
             BidirectionalMaskTransformer(
@@ -839,6 +841,17 @@ class HybridAttentionEntropyModel(tf.keras.Model):
                 num_heads=4,
                 num_layers=num_attention_layers,
                 name=f'attention_{i}'
+            )
+            for i in range(num_channel_groups)
+        ]
+
+        # Attention output to parameters (replaces concat hack)
+        self.attention_to_params = [
+            tf.keras.layers.Conv3D(
+                filters=self.channels_per_group * 2,  # mean and scale
+                kernel_size=1,
+                padding='same',
+                name=f'attn_to_params_{i}'
             )
             for i in range(num_channel_groups)
         ]
@@ -863,7 +876,6 @@ class HybridAttentionEntropyModel(tf.keras.Model):
         # Hyperprior entropy model (for z)
         self.hyper_entropy = PatchedGaussianConditional()
 
-        self.channels_per_group = latent_channels // num_channel_groups
         self.scale_min = 0.01
 
     def _split_params(self, params: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
@@ -900,9 +912,9 @@ class HybridAttentionEntropyModel(tf.keras.Model):
             combined_mean = hyper_mean_slice + context_mean
             combined_scale = hyper_scale_slice * (1.0 + context_scale)
 
-            # Add attention refinement
+            # Project attention features to mean/scale parameters
             hyper_params = tf.concat([combined_mean, combined_scale], axis=-1)
-            attn_params = tf.concat([attn_features, attn_features], axis=-1)  # Use features for both
+            attn_params = self.attention_to_params[i](attn_features)
             combined = tf.concat([hyper_params, attn_params], axis=-1)
             fused_params = self.param_fusions[i](combined)
 
