@@ -209,9 +209,9 @@ class DeepCompressModel(tf.keras.Model):
         self.analysis = AnalysisTransform(config)
         self.synthesis = SynthesisTransform(config)
 
-        # Final projection: map from synthesis channels back to 1-channel occupancy
+        # Final projection: outputs raw logits (no activation) for stable loss
         self.output_projection = tf.keras.layers.Conv3D(
-            filters=1, kernel_size=(1, 1, 1), activation='sigmoid', padding='same'
+            filters=1, kernel_size=(1, 1, 1), padding='same'
         )
 
         # Hyperprior
@@ -238,7 +238,7 @@ class DeepCompressModel(tf.keras.Model):
 
         # Synthesis
         y_hat = self.hyper_synthesis(z)
-        x_hat = self.output_projection(self.synthesis(y))
+        x_hat = tf.sigmoid(self.output_projection(self.synthesis(y)))
 
         return x_hat, y, y_hat, z
 
@@ -294,9 +294,9 @@ class DeepCompressModelV2(tf.keras.Model):
         self.analysis = AnalysisTransform(config)
         self.synthesis = SynthesisTransform(config)
 
-        # Final projection: map from synthesis channels back to 1-channel occupancy
+        # Final projection: outputs raw logits (no activation) for stable loss
         self.output_projection = tf.keras.layers.Conv3D(
-            filters=1, kernel_size=(1, 1, 1), activation='sigmoid', padding='same'
+            filters=1, kernel_size=(1, 1, 1), padding='same'
         )
 
         # Hyperprior transforms
@@ -374,7 +374,7 @@ class DeepCompressModelV2(tf.keras.Model):
 
         Returns:
             Tuple of (x_hat, y, y_hat, z, rate_info) where:
-                - x_hat: Reconstructed input
+                - x_hat: Reconstructed input (sigmoid of logits)
                 - y: Latent representation
                 - y_hat: Quantized latent (or reconstructed)
                 - z: Hyper-latent
@@ -395,29 +395,48 @@ class DeepCompressModelV2(tf.keras.Model):
 
         # Entropy model processing
         if self.entropy_model_type == 'gaussian':
-            # Original behavior
+            # Original behavior with discretized likelihood
             if training:
                 y_noisy = y + tf.random.uniform(tf.shape(y), -0.5, 0.5)
             else:
                 y_noisy = tf.round(y)
             compressed, likelihood = self.entropy_module(y_noisy)
             y_hat = y_noisy
-            # Using pre-computed reciprocal: multiplication is faster than division
-            total_bits = -tf.reduce_sum(likelihood) * LOG_2_RECIPROCAL
+            y_bits = tf.reduce_sum(-tf.math.log(likelihood) * LOG_2_RECIPROCAL)
         else:
-            # Advanced entropy models
-            y_hat, likelihood, total_bits = self.entropy_module(
-                y, z_hat, training=training
+            # Advanced entropy models — pass z for hyper-latent rate
+            y_hat, likelihood, y_bits = self.entropy_module(
+                y, z_hat, z=z, training=training
             )
 
-        # Synthesis
-        x_hat = self.output_projection(self.synthesis(y_hat))
+        # Compute z bits under learned prior
+        if self.entropy_model_type == 'gaussian':
+            # For gaussian, compute z bits directly
+            if not hasattr(self, '_z_entropy') or not self._z_entropy.built:
+                from .entropy_model import PatchedGaussianConditional
+                self._z_entropy = PatchedGaussianConditional()
+                self._z_entropy.build(z.shape)
+            z_likelihood = self._z_entropy.likelihood(z)
+            z_bits = tf.reduce_sum(-tf.math.log(z_likelihood) * LOG_2_RECIPROCAL)
+        else:
+            # z_bits already included in y_bits (via MeanScaleHyperprior)
+            z_bits = tf.constant(0.0)
+
+        total_bits = y_bits + z_bits
+
+        # Synthesis — apply sigmoid to logits for output
+        logits = self.output_projection(self.synthesis(y_hat))
+        x_hat = tf.sigmoid(logits)
 
         # Rate information
+        num_voxels = tf.cast(tf.reduce_prod(tf.shape(inputs)[1:4]), tf.float32)
         rate_info = {
             'likelihood': likelihood,
             'total_bits': total_bits,
-            'bpp': total_bits / tf.cast(tf.reduce_prod(tf.shape(inputs)[1:4]), tf.float32)
+            'y_bits': y_bits,
+            'z_bits': z_bits,
+            'bpp': total_bits / num_voxels,
+            'logits': logits,
         }
 
         return x_hat, y, y_hat, z, rate_info

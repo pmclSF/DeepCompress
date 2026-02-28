@@ -32,12 +32,18 @@ class TrainingPipeline:
         self.model = DeepCompressModel(model_config)
         self.entropy_model = EntropyModel()
 
+        # Rate-distortion trade-off weight
+        self.lambda_rd = self.config['training'].get('lambda_rd', 0.01)
+
         # Initialize optimizers
         lrs = self.config['training']['learning_rates']
         self.optimizers = {
             'reconstruction': tf.keras.optimizers.Adam(learning_rate=lrs['reconstruction']),
             'entropy': tf.keras.optimizers.Adam(learning_rate=lrs['entropy']),
         }
+
+        # Gradient clipping for training stability
+        self.grad_clip_norm = self.config['training'].get('grad_clip_norm', 1.0)
 
         # Checkpoint directory
         self.checkpoint_dir = Path(self.config['training']['checkpoint_dir'])
@@ -49,39 +55,46 @@ class TrainingPipeline:
         self.summary_writer = tf.summary.create_file_writer(str(log_dir))
 
     def _train_step(self, batch: tf.Tensor, training: bool = True) -> Dict[str, tf.Tensor]:
-        """Run a single training step."""
-        with tf.GradientTape(persistent=True) as tape:
+        """Run a single training step with joint rate-distortion optimization."""
+        with tf.GradientTape() as tape:
             inputs = batch[..., tf.newaxis] if len(batch.shape) == 4 else batch
             x_hat, y, y_hat, z = self.model(inputs, training=training)
 
-            # Compute focal loss on reconstruction
+            # Compute focal loss on reconstruction (distortion term)
             focal_loss = self.compute_focal_loss(
                 batch[..., tf.newaxis] if len(batch.shape) == 4 else batch,
                 x_hat,
             )
 
-            # Compute entropy loss
-            # EntropyModel returns log-probabilities, so use them directly
-            _, log_likelihood = self.entropy_model(y, training=training)
-            entropy_loss = -tf.reduce_mean(log_likelihood)
+            # Compute entropy loss (rate term)
+            # EntropyModel returns discretized probability mass
+            _, likelihood = self.entropy_model(y, training=training)
+            entropy_loss = -tf.reduce_mean(tf.math.log(likelihood))
 
-            total_loss = focal_loss + entropy_loss
+            # Joint rate-distortion loss
+            total_loss = focal_loss + self.lambda_rd * entropy_loss
 
         if training:
-            # Update reconstruction model
-            model_grads = tape.gradient(focal_loss, self.model.trainable_variables)
+            # Joint gradient computation over all trainable variables
+            all_vars = self.model.trainable_variables + self.entropy_model.trainable_variables
+            grads = tape.gradient(total_loss, all_vars)
+
+            # Clip gradients for stability
+            grads, _ = tf.clip_by_global_norm(grads, self.grad_clip_norm)
+
+            # Split gradients and apply to respective optimizers
+            model_var_count = len(self.model.trainable_variables)
+            model_grads = grads[:model_var_count]
+            entropy_grads = grads[model_var_count:]
+
             self.optimizers['reconstruction'].apply_gradients(
                 zip(model_grads, self.model.trainable_variables)
             )
 
-            # Update entropy model
-            entropy_grads = tape.gradient(entropy_loss, self.entropy_model.trainable_variables)
             if entropy_grads and any(g is not None for g in entropy_grads):
                 self.optimizers['entropy'].apply_gradients(
                     zip(entropy_grads, self.entropy_model.trainable_variables)
                 )
-
-        del tape
 
         return {
             'focal_loss': focal_loss,

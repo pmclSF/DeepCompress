@@ -191,13 +191,12 @@ class TestAttentionEntropyModel(tf.test.TestCase):
         # Basic sanity checks for untrained models
         avg_likelihood_attn = tf.reduce_mean(likelihood_attn)
 
-        # Likelihood should be finite and reasonable for Gaussian
+        # Likelihood should be finite and reasonable
         self.assertFalse(tf.math.is_nan(avg_likelihood_attn))
         self.assertFalse(tf.math.is_inf(avg_likelihood_attn))
-        # Log-likelihood for Gaussian should be negative (probability < 1)
-        self.assertLess(avg_likelihood_attn, 0.0)
-        # But not catastrophically negative (which would indicate numerical issues)
-        self.assertGreater(avg_likelihood_attn, -100.0)
+        # Discretized probability mass should be in (0, 1]
+        self.assertGreater(avg_likelihood_attn, 0.0)
+        self.assertLessEqual(avg_likelihood_attn, 1.0)
 
     def test_attention_entropy_gradient_flow(self):
         """Gradients flow through the entire model."""
