@@ -8,7 +8,7 @@ import tensorflow as tf
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from model_transforms import (
-    CENICGDN,
+    GDN,
     AnalysisTransform,
     DeepCompressModel,
     DeepCompressModelV2,
@@ -33,10 +33,9 @@ class TestModelTransforms(tf.test.TestCase):
         self.resolution = 64
         self.input_shape = (self.batch_size, self.resolution, self.resolution, self.resolution, 1)
 
-    def test_cenic_gdn(self):
-        channels = 64
-        activation = CENICGDN(channels)
-        input_tensor = tf.random.uniform((2, 32, 32, 32, channels))
+    def test_gdn(self):
+        activation = GDN(inverse=False)
+        input_tensor = tf.random.uniform((2, 32, 32, 32, 64))
         output = activation(input_tensor)
         self.assertEqual(output.shape, input_tensor.shape)
 
@@ -48,6 +47,13 @@ class TestModelTransforms(tf.test.TestCase):
         self.assertNotEmpty(gradients)
         # Check that gradients are non-zero
         self.assertGreater(tf.reduce_sum(tf.abs(gradients[0])), 0)
+
+    def test_igdn(self):
+        """IGDN (inverse GDN) used in synthesis path."""
+        activation = GDN(inverse=True)
+        input_tensor = tf.random.uniform((2, 8, 8, 8, 64))
+        output = activation(input_tensor)
+        self.assertEqual(output.shape, input_tensor.shape)
 
     def test_spatial_separable_conv(self):
         conv = SpatialSeparableConv(filters=64, kernel_size=(3, 3, 3), strides=(1, 1, 1))
@@ -64,17 +70,21 @@ class TestModelTransforms(tf.test.TestCase):
         output = analysis(input_tensor)
         self.assertEqual(len(output.shape), 5)  # 5D tensor (B, D, H, W, C)
         self.assertGreater(output.shape[-1], input_tensor.shape[-1])
-        # Check that CENICGDN layers are present in the conv_layers list
-        has_gdn = any(isinstance(layer, CENICGDN) for layer in analysis.conv_layers)
+        # Check that GDN layers are present in the conv_layers list
+        has_gdn = any(isinstance(layer, GDN) for layer in analysis.conv_layers)
         self.assertTrue(has_gdn)
 
     def test_synthesis_transform(self):
         synthesis = SynthesisTransform(self.config)
-        input_tensor = tf.random.uniform((2, 32, 32, 32, 256))  # Match analysis output channels
+        # Use small spatial dims since Conv3DTranspose upsamples with strides=(2,2,2):
+        # 4 -> 8 -> 16 -> 32
+        input_tensor = tf.random.uniform((1, 4, 4, 4, 256))
         output = synthesis(input_tensor)
         # Synthesis reduces channels progressively
         self.assertEqual(len(output.shape), 5)  # 5D tensor
         self.assertLessEqual(output.shape[-1], input_tensor.shape[-1])
+        # Conv3DTranspose upsamples spatial dims
+        self.assertGreaterEqual(output.shape[1], input_tensor.shape[1])
 
     def test_deep_compress_model(self):
         # Use strides=(1,1,1) to avoid spatial dimension changes
@@ -87,16 +97,19 @@ class TestModelTransforms(tf.test.TestCase):
         )
         model = DeepCompressModel(config_no_stride)
         input_tensor = create_mock_voxel_grid(16, 1)  # Smaller for faster test
-        # Model returns (x_hat, y, y_hat, z) tuple
+        # Model returns (x_hat, y, z_hat, z_noisy) tuple
         output = model(input_tensor, training=True)
         self.assertIsInstance(output, tuple)
         self.assertEqual(len(output), 4)
-        x_hat, y, y_hat, z = output
+        x_hat, y, z_hat, z_noisy = output
         # Check that output tensors have correct shapes
         self.assertEqual(x_hat.shape[:-1], input_tensor.shape[:-1])
         self.assertEqual(len(y.shape), 5)
-        self.assertEqual(len(y_hat.shape), 5)
-        self.assertEqual(len(z.shape), 5)
+        self.assertEqual(len(z_hat.shape), 5)
+        self.assertEqual(len(z_noisy.shape), 5)
+        # x_hat should be sigmoid-activated (values in [0, 1])
+        self.assertAllGreaterEqual(x_hat, 0.0)
+        self.assertAllLessEqual(x_hat, 1.0)
 
     def test_gradient_flow(self):
         model = DeepCompressModel(self.config)

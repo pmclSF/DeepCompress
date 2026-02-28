@@ -4,6 +4,8 @@ from typing import List
 
 import tensorflow as tf
 
+from .file_io import read_point_cloud as _read_point_cloud
+
 
 class PointCloudProcessor:
     """Point cloud processing with TF 2.x operations."""
@@ -12,22 +14,12 @@ class PointCloudProcessor:
         self.block_size = block_size
         self.min_points = min_points
 
-    @tf.function
     def read_point_cloud(self, file_path: str) -> tf.Tensor:
-        """Read point cloud using TF file operations."""
-        raw_data = tf.io.read_file(file_path)
-        lines = tf.strings.split(raw_data, '\n')[1:]  # Skip header
-
-        def parse_line(line):
-            values = tf.strings.split(line)
-            return tf.strings.to_number(values[:3], out_type=tf.float32)
-
-        points = tf.map_fn(
-            parse_line,
-            lines,
-            fn_output_signature=tf.float32
-        )
-        return points
+        """Read point cloud from PLY or OFF file."""
+        vertices = _read_point_cloud(file_path)
+        if vertices is None:
+            raise ValueError(f"Failed to read point cloud: {file_path}")
+        return tf.convert_to_tensor(vertices, dtype=tf.float32)
 
     def partition_point_cloud(self, points: tf.Tensor) -> List[tf.Tensor]:
         """Partition point cloud into blocks using TF operations."""
@@ -67,31 +59,18 @@ class PointCloudProcessor:
 
         for i, block in enumerate(blocks):
             file_path = output_dir / f"{base_name}_block_{i}.ply"
-
-            header = [
-                "ply",
-                "format ascii 1.0",
-                f"element vertex {block.shape[0]}",
-                "property float x",
-                "property float y",
-                "property float z",
-                "end_header"
-            ]
+            points = block.numpy() if isinstance(block, tf.Tensor) else block
 
             with open(file_path, 'w') as f:
-                f.write('\n'.join(header) + '\n')
-
-                # Convert points to strings and write
-                points_str = tf.strings.reduce_join(
-                    tf.strings.as_string(block),
-                    axis=1,
-                    separator=' '
-                )
-                points_str = tf.strings.join([points_str, tf.constant('\n')], '')
-                tf.io.write_file(
-                    str(file_path),
-                    tf.strings.join([tf.strings.join(header, '\n'), points_str])
-                )
+                f.write("ply\n")
+                f.write("format ascii 1.0\n")
+                f.write(f"element vertex {len(points)}\n")
+                f.write("property float x\n")
+                f.write("property float y\n")
+                f.write("property float z\n")
+                f.write("end_header\n")
+                for point in points:
+                    f.write(f"{point[0]} {point[1]} {point[2]}\n")
 
 def main():
     parser = argparse.ArgumentParser(

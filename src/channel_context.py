@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import tensorflow as tf
 
-from constants import LOG_2_RECIPROCAL
+from .constants import LOG_2_RECIPROCAL
 
 
 class SliceTransform(tf.keras.layers.Layer):
@@ -231,8 +231,8 @@ class ChannelContextEntropyModel(tf.keras.Model):
         self.channels_per_group = latent_channels // num_groups
 
         # Import here to avoid circular dependency
-        from entropy_model import ConditionalGaussian
-        from entropy_parameters import EntropyParameters
+        from .entropy_model import ConditionalGaussian, PatchedGaussianConditional
+        from .entropy_parameters import EntropyParameters
 
         # Hyperprior-based parameter prediction
         self.entropy_parameters = EntropyParameters(
@@ -250,6 +250,9 @@ class ChannelContextEntropyModel(tf.keras.Model):
             ConditionalGaussian(name=f'conditional_{i}')
             for i in range(num_groups)
         ]
+
+        # Hyperprior entropy model (for z)
+        self.hyper_entropy = PatchedGaussianConditional()
 
         self.scale_min = 0.01
 
@@ -269,6 +272,7 @@ class ChannelContextEntropyModel(tf.keras.Model):
         return mean, scale
 
     def call(self, y: tf.Tensor, z_hat: tf.Tensor,
+             z: Optional[tf.Tensor] = None,
              training: Optional[bool] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Process latent y using hyperprior and channel-wise context.
@@ -279,6 +283,7 @@ class ChannelContextEntropyModel(tf.keras.Model):
         Args:
             y: Main latent representation.
             z_hat: Decoded hyperprior.
+            z: Quantized/noised hyper-latent for computing z rate.
             training: Whether in training mode.
 
         Returns:
@@ -305,22 +310,17 @@ class ChannelContextEntropyModel(tf.keras.Model):
 
             # Get context params (using y for training, y_hat for inference)
             # Note: Use .call() to pass non-tensor group_idx as keyword argument
-            if training:
+            if i == 0:
+                # First group: no context available, channel_context returns zeros
+                context_mean, context_scale = self.channel_context.call(y, group_idx=0)
+            elif training:
                 # Training: use ground truth y for context (teacher forcing)
                 context_mean, context_scale = self.channel_context.call(y, group_idx=i)
             else:
-                # Inference: use only already decoded groups (no padding needed!)
-                # The channel_context only uses channels 0..group_idx-1, so we
-                # only need to concatenate the decoded parts without padding.
-                # This optimization reduces memory allocations by ~25%.
-                if i == 0:
-                    # First group has no context - channel_context handles this
-                    y_hat_partial = y_hat_parts[0] if y_hat_parts else None
-                else:
-                    # Concatenate only the decoded parts (no zero padding)
-                    y_hat_partial = tf.concat(y_hat_parts, axis=-1)
+                # Inference: use already decoded groups for context
+                y_hat_partial = tf.concat(y_hat_parts, axis=-1)
                 context_mean, context_scale = self.channel_context.call(
-                    y_hat_partial if y_hat_partial is not None else y, group_idx=i
+                    y_hat_partial, group_idx=i
                 )
 
             # Fuse parameters
@@ -341,10 +341,18 @@ class ChannelContextEntropyModel(tf.keras.Model):
         y_hat = tf.concat(y_hat_parts, axis=-1)
         y_likelihood = tf.concat(likelihood_parts, axis=-1)
 
-        # Compute total bits
-        # Using pre-computed reciprocal: multiplication is faster than division
-        bits_per_element = -y_likelihood * LOG_2_RECIPROCAL
-        total_bits = tf.reduce_sum(bits_per_element)
+        # Compute y bits from discretized likelihood
+        y_bits = tf.reduce_sum(-tf.math.log(y_likelihood) * LOG_2_RECIPROCAL)
+
+        # Compute z bits if z is provided
+        z_bits = tf.constant(0.0)
+        if z is not None:
+            if not self.hyper_entropy.built:
+                self.hyper_entropy.build(z.shape)
+            z_likelihood = self.hyper_entropy.likelihood(z)
+            z_bits = tf.reduce_sum(-tf.math.log(z_likelihood) * LOG_2_RECIPROCAL)
+
+        total_bits = y_bits + z_bits
 
         return y_hat, y_likelihood, total_bits
 

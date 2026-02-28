@@ -5,10 +5,10 @@ from typing import Any, Dict
 
 import tensorflow as tf
 
-from data_loader import DataLoader
-from ev_compare import PointCloudMetrics
-from model_transforms import DeepCompressModel, TransformConfig
-from mp_report import ExperimentReporter
+from .data_loader import DataLoader
+from .ev_compare import PointCloudMetrics
+from .model_transforms import DeepCompressModel, TransformConfig
+from .mp_report import ExperimentReporter
 
 
 @dataclass
@@ -24,9 +24,12 @@ class EvaluationResult:
 class EvaluationPipeline:
     """Pipeline for evaluating DeepCompress model."""
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, checkpoint_override: str = None):
         self.config = self._load_config(config_path)
         self.logger = logging.getLogger(__name__)
+
+        if checkpoint_override:
+            self.config['checkpoint_path'] = checkpoint_override
 
         # Initialize components
         self.data_loader = DataLoader(self.config)
@@ -52,7 +55,10 @@ class EvaluationPipeline:
         # Load weights if checkpoint provided
         checkpoint_path = self.config.get('checkpoint_path')
         if checkpoint_path:
-            model.load_weights(checkpoint_path)
+            resolved = Path(checkpoint_path).resolve()
+            if not resolved.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {resolved}")
+            model.load_weights(str(resolved))
 
         return model
 
@@ -60,7 +66,7 @@ class EvaluationPipeline:
                         point_cloud) -> Dict[str, float]:
         """Evaluate model on single point cloud."""
         # Forward pass through model
-        x_hat, y, y_hat, z = self.model(point_cloud, training=False)
+        x_hat, y, z_hat, z_noisy = self.model(point_cloud, training=False)
 
         # Compute metrics
         results = {}
@@ -136,7 +142,7 @@ def main():
     )
 
     # Run evaluation
-    pipeline = EvaluationPipeline(args.config)
+    pipeline = EvaluationPipeline(args.config, checkpoint_override=args.checkpoint)
     results = pipeline.evaluate()
     pipeline.generate_report(results)
 

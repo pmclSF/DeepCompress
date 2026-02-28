@@ -10,9 +10,9 @@ class TrainingPipeline:
     def __init__(self, config_path: str):
         import yaml
 
-        from data_loader import DataLoader
-        from entropy_model import EntropyModel
-        from model_transforms import DeepCompressModel, TransformConfig
+        from .data_loader import DataLoader
+        from .entropy_model import EntropyModel
+        from .model_transforms import DeepCompressModel, TransformConfig
 
         self.config_path = config_path
         with open(config_path, 'r') as f:
@@ -32,12 +32,18 @@ class TrainingPipeline:
         self.model = DeepCompressModel(model_config)
         self.entropy_model = EntropyModel()
 
+        # Rate-distortion trade-off weight
+        self.lambda_rd = self.config['training'].get('lambda_rd', 0.01)
+
         # Initialize optimizers
         lrs = self.config['training']['learning_rates']
         self.optimizers = {
             'reconstruction': tf.keras.optimizers.Adam(learning_rate=lrs['reconstruction']),
             'entropy': tf.keras.optimizers.Adam(learning_rate=lrs['entropy']),
         }
+
+        # Gradient clipping for training stability
+        self.grad_clip_norm = self.config['training'].get('grad_clip_norm', 1.0)
 
         # Checkpoint directory
         self.checkpoint_dir = Path(self.config['training']['checkpoint_dir'])
@@ -49,39 +55,46 @@ class TrainingPipeline:
         self.summary_writer = tf.summary.create_file_writer(str(log_dir))
 
     def _train_step(self, batch: tf.Tensor, training: bool = True) -> Dict[str, tf.Tensor]:
-        """Run a single training step."""
-        with tf.GradientTape(persistent=True) as tape:
+        """Run a single training step with joint rate-distortion optimization."""
+        with tf.GradientTape() as tape:
             inputs = batch[..., tf.newaxis] if len(batch.shape) == 4 else batch
-            x_hat, y, y_hat, z = self.model(inputs, training=training)
+            x_hat, y, z_hat, z_noisy = self.model(inputs, training=training)
 
-            # Compute focal loss on reconstruction
+            # Compute focal loss on reconstruction (distortion term)
             focal_loss = self.compute_focal_loss(
                 batch[..., tf.newaxis] if len(batch.shape) == 4 else batch,
                 x_hat,
             )
 
-            # Compute entropy loss
-            # EntropyModel returns log-probabilities, so use them directly
-            _, log_likelihood = self.entropy_model(y, training=training)
-            entropy_loss = -tf.reduce_mean(log_likelihood)
+            # Compute entropy loss (rate term)
+            # EntropyModel returns discretized probability mass
+            _, likelihood = self.entropy_model(y, training=training)
+            entropy_loss = -tf.reduce_mean(tf.math.log(likelihood))
 
-            total_loss = focal_loss + entropy_loss
+            # Joint rate-distortion loss
+            total_loss = focal_loss + self.lambda_rd * entropy_loss
 
         if training:
-            # Update reconstruction model
-            model_grads = tape.gradient(focal_loss, self.model.trainable_variables)
+            # Joint gradient computation over all trainable variables
+            all_vars = self.model.trainable_variables + self.entropy_model.trainable_variables
+            grads = tape.gradient(total_loss, all_vars)
+
+            # Clip gradients for stability
+            grads, _ = tf.clip_by_global_norm(grads, self.grad_clip_norm)
+
+            # Split gradients and apply to respective optimizers
+            model_var_count = len(self.model.trainable_variables)
+            model_grads = grads[:model_var_count]
+            entropy_grads = grads[model_var_count:]
+
             self.optimizers['reconstruction'].apply_gradients(
                 zip(model_grads, self.model.trainable_variables)
             )
 
-            # Update entropy model
-            entropy_grads = tape.gradient(entropy_loss, self.entropy_model.trainable_variables)
             if entropy_grads and any(g is not None for g in entropy_grads):
                 self.optimizers['entropy'].apply_gradients(
                     zip(entropy_grads, self.entropy_model.trainable_variables)
                 )
-
-        del tape
 
         return {
             'focal_loss': focal_loss,
@@ -141,6 +154,9 @@ class TrainingPipeline:
             losses = self._train_step(batch, training=False)
             val_losses.append({k: v.numpy() for k, v in losses.items()})
 
+        if not val_losses:
+            return {'focal_loss': 0.0, 'entropy_loss': 0.0, 'total_loss': float('inf')}
+
         avg_losses = {}
         for metric in val_losses[0].keys():
             avg_losses[metric] = float(tf.reduce_mean([x[metric] for x in val_losses]))
@@ -155,26 +171,29 @@ class TrainingPipeline:
 
         for opt_name, optimizer in self.optimizers.items():
             if optimizer.variables:
-                opt_weights = [v.numpy() for v in optimizer.variables]
-                np.save(
-                    str(checkpoint_path / f'{opt_name}_optimizer.npy'),
-                    np.array(opt_weights, dtype=object),
-                    allow_pickle=True,
-                )
+                opt_dir = checkpoint_path / f'{opt_name}_optimizer'
+                opt_dir.mkdir(parents=True, exist_ok=True)
+                for i, v in enumerate(optimizer.variables):
+                    np.save(str(opt_dir / f'{i}.npy'), v.numpy())
 
         self.logger.info(f"Saved checkpoint: {name}")
 
     def load_checkpoint(self, name: str):
-        checkpoint_path = self.checkpoint_dir / name
+        checkpoint_path = (self.checkpoint_dir / name).resolve()
+        try:
+            checkpoint_path.relative_to(self.checkpoint_dir.resolve())
+        except ValueError:
+            raise ValueError(f"Checkpoint path escapes checkpoint directory: {name}")
         self.model.load_weights(str(checkpoint_path / 'model.weights.h5'))
         self.entropy_model.load_weights(str(checkpoint_path / 'entropy.weights.h5'))
 
         for opt_name, optimizer in self.optimizers.items():
-            opt_path = checkpoint_path / f'{opt_name}_optimizer.npy'
-            if opt_path.exists() and optimizer.variables:
-                opt_weights = np.load(str(opt_path), allow_pickle=True)
-                for var, w in zip(optimizer.variables, opt_weights):
-                    var.assign(w)
+            opt_dir = checkpoint_path / f'{opt_name}_optimizer'
+            if opt_dir.exists() and optimizer.variables:
+                for i, var in enumerate(optimizer.variables):
+                    path = opt_dir / f'{i}.npy'
+                    if path.exists():
+                        var.assign(np.load(str(path), allow_pickle=False))
 
         self.logger.info(f"Loaded checkpoint: {name}")
 

@@ -1,8 +1,52 @@
+import importlib
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import tensorflow as tf
+
+# ---------------------------------------------------------------------------
+# Import hook: redirect bare module imports to src.X so relative imports work.
+#
+# Test files use `sys.path.insert(0, src/)` then `from model_transforms import X`.
+# Source modules now use relative imports (`from .constants import X`), which
+# require loading as part of the `src` package.  This meta-path finder
+# intercepts bare imports of src modules and loads them as `src.<name>`,
+# making both conventions compatible without changing any test files.
+# ---------------------------------------------------------------------------
+_project_root = str(Path(__file__).parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+_src_dir = Path(__file__).parent.parent / 'src'
+
+
+class _SrcPackageFinder:
+    """Meta-path finder that loads bare src module imports as src.X."""
+
+    _loading = set()
+
+    def find_module(self, fullname, path=None):
+        if fullname in self._loading:
+            return None
+        if '.' not in fullname and (_src_dir / f'{fullname}.py').exists():
+            return self
+        return None
+
+    def load_module(self, fullname):
+        if fullname in sys.modules:
+            return sys.modules[fullname]
+        self._loading.add(fullname)
+        try:
+            mod = importlib.import_module(f'src.{fullname}')
+            sys.modules[fullname] = mod
+            return mod
+        finally:
+            self._loading.discard(fullname)
+
+
+sys.meta_path.insert(0, _SrcPackageFinder())
 
 
 def pytest_collection_modifyitems(items):

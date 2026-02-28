@@ -28,7 +28,7 @@ import tensorflow as tf
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
+from .model_transforms import DeepCompressModel, DeepCompressModelV2, TransformConfig
 
 
 @dataclass
@@ -165,26 +165,35 @@ def benchmark_model(
     decode_times = []
 
     for _ in range(timed_runs):
-        # Encode
-        start = time.perf_counter()
-        outputs = model(input_tensor, training=False)
-        encode_time = time.perf_counter() - start
-        encode_times.append(encode_time)
+        if isinstance(model, DeepCompressModelV2):
+            # V2: measure encode and decode separately
+            start = time.perf_counter()
+            compressed = model.compress(input_tensor)
+            encode_time = time.perf_counter() - start
 
-        # For decode timing, we'd need separate encode/decode methods
-        # For now, we include it in encode time
-        decode_times.append(0)
+            start = time.perf_counter()
+            _ = model.decompress(compressed)
+            decode_time = time.perf_counter() - start
+        else:
+            # V1: full forward pass (no separate encode/decode)
+            start = time.perf_counter()
+            _ = model(input_tensor, training=False)
+            encode_time = time.perf_counter() - start
+            decode_time = 0
+
+        encode_times.append(encode_time)
+        decode_times.append(decode_time)
 
     # Average times
     avg_encode_ms = np.mean(encode_times) * 1000
     avg_decode_ms = np.mean(decode_times) * 1000
 
     # Get final outputs for metrics
-    # V1 returns (x_hat, y, y_hat, z)
+    # V1 returns (x_hat, y, z_hat, z_noisy)
     # V2 returns (x_hat, y, y_hat, z, rate_info)
     outputs = model(input_tensor, training=False)
     if len(outputs) == 4:
-        x_hat, y, y_hat, z = outputs
+        x_hat, y, z_hat, z_noisy = outputs
         rate_info = None
     else:
         x_hat, y, y_hat, z, rate_info = outputs
@@ -202,12 +211,13 @@ def benchmark_model(
         # Use actual bits from entropy model
         estimated_bits = float(rate_info['total_bits'])
     else:
-        # Approximate - actual bits depend on entropy coding
-        # We use the entropy of the quantized latent
-        y_quantized = tf.round(y_hat)
-        unique_values = len(np.unique(y_quantized.numpy()))
-        entropy_estimate = np.log2(max(unique_values, 1))
-        estimated_bits = latent_elements * entropy_estimate
+        # Approximate using Shannon entropy of quantized latent
+        y_quantized = tf.round(y)
+        y_flat = y_quantized.numpy().flatten()
+        _, counts = np.unique(y_flat, return_counts=True)
+        probs = counts / counts.sum()
+        entropy_per_symbol = -np.sum(probs * np.log2(probs))
+        estimated_bits = latent_elements * entropy_per_symbol
 
     bits_per_voxel = estimated_bits / input_elements
 

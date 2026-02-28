@@ -153,13 +153,15 @@ class OctreeCompressor:
                     mid[i] if octant[i] == 0 else bounds[1][i] for i in range(3)
                 ])
 
-                # Find points in this octant with epsilon for stability
-                epsilon = 1e-10
-                mask = np.all(
-                    (points >= min_corner - epsilon) &
-                    (points <= max_corner + epsilon),
-                    axis=1
-                )
+                # Half-open intervals: [min, mid) for lower, [mid, max] for upper
+                lower_cond = points >= min_corner
+                upper_cond = np.array([
+                    points[:, i] <= max_corner[i]
+                    if octant[i] == 1  # upper half: inclusive
+                    else points[:, i] < max_corner[i]  # lower half: exclusive
+                    for i in range(3)
+                ]).T
+                mask = np.all(lower_cond & upper_cond, axis=1)
                 if np.any(mask):
                     partition_recursive(points[mask], (min_corner, max_corner))
 
@@ -181,19 +183,47 @@ class OctreeCompressor:
         os.makedirs(debug_dir, exist_ok=True)
 
         for name, array in data.items():
-            if isinstance(array, (np.ndarray, dict)):
+            if isinstance(array, np.ndarray):
                 np.save(os.path.join(debug_dir, f"{name}.npy"), array)
 
     def save_compressed(self, grid: np.ndarray, metadata: Dict[str, Any], filename: str) -> None:
         """Save compressed data with metadata."""
-        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
-        np.savez_compressed(filename, grid=grid, metadata=metadata)
+        import json
+        import math
 
-        if self.debug_output:
-            debug_path = f"{filename}.debug.npz"
-            np.savez_compressed(debug_path, **metadata)
+        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+        # Save grid without pickle (bool array, no object dtype)
+        np.savez_compressed(filename, grid=grid)
+        # Save metadata as JSON sidecar (safe, no arbitrary code execution)
+        meta_path = filename + '.meta.json'
+        serializable = {}
+        for k, v in metadata.items():
+            if isinstance(v, np.ndarray):
+                serializable[k] = v.tolist()
+            elif isinstance(v, (np.floating, np.integer)):
+                val = v.item()
+                if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                    serializable[k] = None
+                else:
+                    serializable[k] = val
+            elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                serializable[k] = None
+            else:
+                serializable[k] = v
+        with open(meta_path, 'w') as f:
+            json.dump(serializable, f)
 
     def load_compressed(self, filename: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Load compressed data with metadata."""
-        data = np.load(filename, allow_pickle=True)
-        return data['grid'], data['metadata'].item()
+        import json
+
+        data = np.load(filename, allow_pickle=False)
+        grid = data['grid']
+        meta_path = filename + '.meta.json'
+        with open(meta_path, 'r') as f:
+            metadata = json.load(f)
+        # Convert lists back to numpy arrays for known array fields
+        for key in ('min_bounds', 'max_bounds', 'ranges', 'normal_grid'):
+            if key in metadata:
+                metadata[key] = np.array(metadata[key])
+        return grid, metadata
