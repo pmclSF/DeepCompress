@@ -1,0 +1,35 @@
+data:
+  modelnet40_path: "/path/to/modelnet40"
+  ivfb_path: "/path/to/8ivfb"
+  resolution: 64
+  block_size: 1.0
+  min_points: 100
+  augment: true
+
+model:
+  filters: 64
+  activation: "cenic_gdn"
+  conv_type: "separable"
+  compression:
+    use_entropy_coding: true
+    use_hyperprior: true
+
+training:
+  batch_size: 32
+  epochs: 100
+  learning_rates:
+    reconstruction: 1.0e-4
+    entropy: 1.0e-3
+  focal_loss:
+    alpha: 0.75
+    gamma: 2.0
+  checkpoint_dir: "checkpoints/"
+
+evaluation:
+  batch_size: 1
+  metrics:
+    - "psnr"
+    - "chamfer"
+    - "bd_rate"
+  output_dir: "results/"
+  visualize: true
